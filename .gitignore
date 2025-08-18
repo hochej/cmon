@@ -8,3 +8,18 @@ wheels/
 
 # Virtual environments
 .venv
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test data and temporary files
+*.json.bak
+test_*.json
+temp_*.json
