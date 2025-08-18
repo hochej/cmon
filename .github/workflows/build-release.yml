@@ -1,0 +1,100 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  build-linux:
+    name: Build Linux Binary (RHEL 9 Compatible)
+    runs-on: ubuntu-latest
+    container:
+      image: almalinux:9
+    
+    steps:
+    - name: Install system dependencies
+      run: |
+        dnf update -y
+        dnf install -y gcc gcc-c++ make git curl tar gzip xz
+        dnf install -y glibc-devel libffi-devel openssl-devel
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+    
+    - name: Set up Python with uv
+      run: |
+        uv python install ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        uv sync --extra build
+    
+    - name: Build binary
+      run: |
+        chmod +x build_binary.sh
+        ./build_binary.sh
+    
+    - name: Test binary
+      run: |
+        ./dist/cmon --version
+        ./dist/cmon --help
+    
+    - name: Rename binary for release
+      run: |
+        mv dist/cmon dist/cmon-linux-x86_64
+    
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cmon-linux-x86_64
+        path: dist/cmon-linux-x86_64
+        retention-days: 30
+
+  create-release:
+    name: Create Release
+    needs: build-linux
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          artifacts/cmon-linux-x86_64/cmon-linux-x86_64
+        body: |
+          ## RHEL 9 Compatible Binary Release
+          
+          Download the binary and make it executable:
+          ```bash
+          curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cmon-linux-x86_64 -o cmon
+          chmod +x cmon
+          ./cmon --version
+          ```
+          
+          ### Changes
+          See commit history for detailed changes.
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
