@@ -8,9 +8,6 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  PYTHON_VERSION: "3.13"
-
 jobs:
   build-linux:
     name: Build Linux Binary (RHEL 9 Compatible)
@@ -24,6 +21,7 @@ jobs:
         dnf update -y
         dnf install -y gcc gcc-c++ make git curl tar gzip xz ca-certificates
         dnf install -y glibc-devel libffi-devel openssl-devel zlib-devel
+        dnf install -y python3.13 python3.13-devel python3.13-pip
     
     - name: Checkout code
       uses: actions/checkout@v4
@@ -34,24 +32,40 @@ jobs:
         source ~/.cargo/env
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
     
+    - name: Verify uv installation
+      run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
+        which uv
+        uv --version
+    
     - name: Set up Python with uv
       run: |
         export PATH="$HOME/.cargo/bin:$PATH"
-        uv python install ${{ env.PYTHON_VERSION }}
+        uv python install 3.13
     
     - name: Install dependencies
       run: |
         export PATH="$HOME/.cargo/bin:$PATH"
         uv sync --extra build
     
-    - name: Build binary
+    - name: Build binary with debug output
       run: |
         export PATH="$HOME/.cargo/bin:$PATH"
         chmod +x build_binary.sh
+        # Add debug info
+        echo "=== Environment ==="
+        env | grep -E "(PATH|PYTHON|UV)" || true
+        echo "=== UV Info ==="
+        uv --version
+        echo "=== Python Info ==="
+        uv run python --version
+        echo "=== Building ==="
         ./build_binary.sh
     
     - name: Test binary
       run: |
+        ls -la dist/
+        file dist/cmon
         ./dist/cmon --version
         ./dist/cmon --help
     
