@@ -1,6 +1,14 @@
+<div align="center">
+
+![cmon Logo](./public/cmon_logo.svg)
+
 # cmon
 
+[![Build and Release](https://github.com/merckgroup/cmon/actions/workflows/build-release.yml/badge.svg)](https://github.com/merckgroup/cmon/actions/workflows/build-release.yml)
+
 Modern Slurm cluster monitoring tool with enhanced job and node visualization.
+
+</div>
 
 ## Installation
 
