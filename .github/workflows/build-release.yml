@@ -19,7 +19,7 @@ jobs:
     - name: Install system dependencies
       run: |
         dnf update -y
-        dnf install -y gcc gcc-c++ make git tar gzip xz ca-certificates which --allowerasing
+        dnf install -y gcc gcc-c++ make git tar gzip xz ca-certificates which file --allowerasing
         dnf install -y glibc-devel libffi-devel openssl-devel zlib-devel
         dnf install -y python3 python3-devel python3-pip
     
