@@ -7,7 +7,7 @@ Modern Slurm cluster monitoring tool with enhanced job and node visualization.
 ### From Binary (Recommended for HPC)
 ```bash
 # Download the latest RHEL 9 compatible binary
-curl -L https://github.com/your-org/cmon/releases/latest/download/cmon-linux-x86_64 -o cmon
+curl -L https://github.com/merckgroup/cmon/releases/latest/download/cmon-linux-x86_64 -o cmon
 chmod +x cmon
 
 # Test it works

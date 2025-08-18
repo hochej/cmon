@@ -22,8 +22,8 @@ jobs:
     - name: Install system dependencies
       run: |
         dnf update -y
-        dnf install -y gcc gcc-c++ make git curl tar gzip xz
-        dnf install -y glibc-devel libffi-devel openssl-devel
+        dnf install -y gcc gcc-c++ make git curl tar gzip xz ca-certificates
+        dnf install -y glibc-devel libffi-devel openssl-devel zlib-devel
     
     - name: Checkout code
       uses: actions/checkout@v4
@@ -31,18 +31,22 @@ jobs:
     - name: Install uv
       run: |
         curl -LsSf https://astral.sh/uv/install.sh | sh
+        source ~/.cargo/env
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
     
     - name: Set up Python with uv
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv python install ${{ env.PYTHON_VERSION }}
     
     - name: Install dependencies
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         uv sync --extra build
     
     - name: Build binary
       run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
         chmod +x build_binary.sh
         ./build_binary.sh
     

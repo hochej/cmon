@@ -3,6 +3,9 @@ set -e
 
 echo "Building cmon binary..."
 
+# Ensure PATH includes uv
+export PATH="$HOME/.cargo/bin:$PATH"
+
 # Install build dependencies
 echo "Installing build dependencies..."
 uv sync --extra build
