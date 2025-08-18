@@ -6,8 +6,10 @@
 
 [![Build and Release](https://github.com/merckgroup/cmon/actions/workflows/build-release.yml/badge.svg)](https://github.com/merckgroup/cmon/actions/workflows/build-release.yml)
 
-Modern Slurm cluster monitoring tool with enhanced job and node visualization.
-
+[`cmon`](https://github.com/merckgroup/cmon) is a monitoring tool that
+provides an enhanced view of the cluster's jobs, nodes, and overall
+status. It offers a cleaner, more intuitive interface compared to
+traditional Slurm commands.
 </div>
 
 ## Installation
