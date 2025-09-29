@@ -1,19 +1,13 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
+# Rust build artifacts
+/target
+Cargo.lock
 
 # IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
+.vs/
 
 # OS files
 .DS_Store
@@ -23,3 +17,10 @@ Thumbs.db
 *.json.bak
 test_*.json
 temp_*.json
+
+# Benchmark outputs
+/benches/target
+
+# Backup files
+*~
+*.bak

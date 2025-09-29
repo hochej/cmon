@@ -1,0 +1,49 @@
+[package]
+name = "cmon"
+version = "0.1.0"
+edition = "2024"
+authors = ["cmon contributors"]
+description = "Fast cluster monitoring tool for Slurm"
+license = "MIT"
+
+[[bin]]
+name = "cmon"
+path = "src/main.rs"
+
+[dependencies]
+# JSON serialization/deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI framework
+clap = { version = "4.5", features = ["derive", "color", "suggestions"] }
+
+# Terminal formatting and colors
+tabled = { version = "0.16", features = ["ansi"] }
+owo-colors = "4.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Date/time handling
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+
+# Signal handling for Ctrl+C
+ctrlc = "3.4"
+
+# Terminal handling for watch mode
+crossterm = "0.28"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "cmon_bench"
+harness = false
