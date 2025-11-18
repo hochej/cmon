@@ -47,7 +47,7 @@ enum Commands {
 
         /// Watch mode: refresh every N seconds
         #[arg(short, long, value_name = "SECONDS", default_value = "0")]
-        watch: u64,
+        watch: f64,
     },
 
     /// Show node information
@@ -70,7 +70,7 @@ enum Commands {
 
         /// Watch mode: refresh every N seconds
         #[arg(short, long, value_name = "SECONDS", default_value = "0")]
-        watch: u64,
+        watch: f64,
     },
 
     /// Show cluster status
@@ -85,7 +85,23 @@ enum Commands {
 
         /// Watch mode: refresh every N seconds
         #[arg(short, long, value_name = "SECONDS", default_value = "0")]
-        watch: u64,
+        watch: f64,
+    },
+
+    /// Show partition utilization
+    #[command(alias = "part")]
+    Partitions {
+        /// Filter by partition
+        #[arg(short, long)]
+        partition: Option<String>,
+
+        /// Filter by user
+        #[arg(short, long)]
+        user: Option<String>,
+
+        /// Watch mode: refresh every N seconds
+        #[arg(short, long, value_name = "SECONDS", default_value = "0")]
+        watch: f64,
     },
 }
 
@@ -102,7 +118,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Jobs { all, user, partition, state, watch }) => {
-            if watch > 0 {
+            if watch > 0.0 {
                 watch_loop(watch, || {
                     handle_jobs_command(&slurm, all, user.as_deref(), partition.as_deref(), state.as_deref())
                 })?;
@@ -112,7 +128,7 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Nodes { partition, nodelist, all, state, watch }) => {
-            if watch > 0 {
+            if watch > 0.0 {
                 watch_loop(watch, || {
                     handle_nodes_command(&slurm, partition.as_deref(), nodelist.as_deref(), all, state.as_deref())
                 })?;
@@ -122,12 +138,22 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Status { partition, user, watch }) => {
-            if watch > 0 {
+            if watch > 0.0 {
                 watch_loop(watch, || {
                     handle_status_command(&slurm, partition.as_deref(), user.as_deref())
                 })?;
             } else {
                 let output = handle_status_command(&slurm, partition.as_deref(), user.as_deref())?;
+                println!("{}", output);
+            }
+        }
+        Some(Commands::Partitions { partition, user, watch }) => {
+            if watch > 0.0 {
+                watch_loop(watch, || {
+                    handle_partitions_command(&slurm, partition.as_deref(), user.as_deref())
+                })?;
+            } else {
+                let output = handle_partitions_command(&slurm, partition.as_deref(), user.as_deref())?;
                 println!("{}", output);
             }
         }
@@ -142,7 +168,7 @@ fn main() -> Result<()> {
 }
 
 /// Watch loop that repeatedly executes a command with flicker-free updates
-fn watch_loop<F>(interval: u64, command: F) -> Result<()>
+fn watch_loop<F>(interval: f64, command: F) -> Result<()>
 where
     F: Fn() -> Result<String>,
 {
@@ -191,7 +217,7 @@ where
             stdout.flush()?;
 
             // Sleep for the specified interval
-            thread::sleep(Duration::from_secs(interval));
+            thread::sleep(Duration::from_secs_f64(interval));
         }
         Ok(())
     })();
@@ -274,4 +300,15 @@ fn handle_status_command(
     output.push_str(&display::format_nodes(&status.nodes));
 
     Ok(output)
+}
+
+fn handle_partitions_command(
+    slurm: &SlurmInterface,
+    partition: Option<&str>,
+    user: Option<&str>,
+) -> Result<String> {
+    let status = slurm.get_cluster_status(partition, user, None)?;
+
+    // Only show cluster status and partition utilization, no node table
+    Ok(display::format_cluster_status(&status))
 }
