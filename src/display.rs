@@ -407,6 +407,8 @@ pub fn format_cluster_status(status: &ClusterStatus) -> String {
 
     output.push_str(&format_partition_stats(status));
 
+    output.push_str(&format!("{}\n", "╰──────────────────────────────────────────────────────────────────────────────╯".blue()));
+
     output
 }
 
@@ -464,8 +466,10 @@ fn format_partition_stats(status: &ClusterStatus) -> String {
         }
     }
 
-    // Display each partition
-    for (name, nodes) in &partitions {
+    // Display each partition in a consistent order
+    let partition_order = ["CPU Nodes", "GPU Nodes", "Fat Nodes", "VDI Nodes"];
+    for name in partition_order {
+        let nodes = &partitions[name];
         if nodes.is_empty() {
             continue;
         }

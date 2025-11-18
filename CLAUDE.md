@@ -12,19 +12,24 @@ Never use any emojis
 ### Running the Tool
 ```bash
 # Basic usage
-uv run cmon
+cmon
 
 # View jobs (running only)
-uv run cmon jobs
+cmon jobs
 
 # View all jobs (including pending, completing, etc.)
-uv run cmon jobs --all
+cmon jobs --all
 
-# View cluster status
-uv run cmon status
+# View cluster status (includes node table)
+cmon status
+
+# View partition utilization only (no node table)
+cmon partitions
+# or use the short alias
+cmon part
 
 # View nodes
-uv run cmon nodes
+cmon nodes
 ```
 
 ### Submitting Test Jobs
