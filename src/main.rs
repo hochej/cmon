@@ -3,6 +3,7 @@
 mod display;
 mod models;
 mod slurm;
+mod tui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -103,6 +104,63 @@ enum Commands {
         #[arg(short, long, value_name = "SECONDS", default_value = "0")]
         watch: f64,
     },
+
+    /// Show personal dashboard (your jobs and statistics)
+    #[command(alias = "my")]
+    Me {
+        /// Watch mode: refresh every N seconds
+        #[arg(short, long, value_name = "SECONDS", default_value = "0")]
+        watch: f64,
+    },
+
+    /// Show detailed information for a specific job
+    Job {
+        /// Job ID to inspect
+        job_id: u64,
+    },
+
+    /// Show job history
+    History {
+        /// Number of days to look back (default: 7)
+        #[arg(short, long, default_value = "7")]
+        days: u32,
+
+        /// Filter by job states (comma-separated, e.g. COMPLETED,FAILED,TIMEOUT)
+        #[arg(long, value_name = "STATES")]
+        state: Option<String>,
+
+        /// Filter by partition
+        #[arg(short, long)]
+        partition: Option<String>,
+
+        /// Show all users' jobs (not just your own)
+        #[arg(short, long)]
+        all: bool,
+
+        /// Maximum number of jobs to show
+        #[arg(short = 'n', long, default_value = "50")]
+        limit: usize,
+    },
+
+    /// Show problematic nodes (down, draining, failed, maintenance)
+    #[command(alias = "issues")]
+    Down {
+        /// Filter by partition
+        #[arg(short, long)]
+        partition: Option<String>,
+
+        /// Show all problem states (including reserved, powered down)
+        #[arg(short, long)]
+        all: bool,
+
+        /// Watch mode: refresh every N seconds
+        #[arg(short, long, value_name = "SECONDS", default_value = "0")]
+        watch: f64,
+    },
+
+    /// Launch interactive TUI mode
+    #[command(alias = "ui")]
+    Tui,
 }
 
 fn main() -> Result<()> {
@@ -156,6 +214,38 @@ fn main() -> Result<()> {
                 let output = handle_partitions_command(&slurm, partition.as_deref(), user.as_deref())?;
                 println!("{}", output);
             }
+        }
+        Some(Commands::Me { watch }) => {
+            let username = SlurmInterface::get_current_user();
+            if watch > 0.0 {
+                watch_loop(watch, || {
+                    handle_me_command(&slurm, &username)
+                })?;
+            } else {
+                let output = handle_me_command(&slurm, &username)?;
+                println!("{}", output);
+            }
+        }
+        Some(Commands::Job { job_id }) => {
+            let output = handle_job_command(&slurm, job_id)?;
+            println!("{}", output);
+        }
+        Some(Commands::History { days, state, partition, all, limit }) => {
+            let output = handle_history_command(&slurm, days, state.as_deref(), partition.as_deref(), all, limit)?;
+            println!("{}", output);
+        }
+        Some(Commands::Down { partition, all, watch }) => {
+            if watch > 0.0 {
+                watch_loop(watch, || {
+                    handle_down_command(&slurm, partition.as_deref(), all)
+                })?;
+            } else {
+                let output = handle_down_command(&slurm, partition.as_deref(), all)?;
+                println!("{}", output);
+            }
+        }
+        Some(Commands::Tui) => {
+            tui::run()?;
         }
         None => {
             // Default: show status
@@ -311,4 +401,124 @@ fn handle_partitions_command(
 
     // Only show cluster status and partition utilization, no node table
     Ok(display::format_cluster_status(&status))
+}
+
+fn handle_me_command(
+    slurm: &SlurmInterface,
+    username: &str,
+) -> Result<String> {
+    let summary = slurm.get_personal_summary(username)?;
+    Ok(display::format_personal_summary(&summary))
+}
+
+fn handle_job_command(
+    slurm: &SlurmInterface,
+    job_id: u64,
+) -> Result<String> {
+    let job = slurm.get_job_details(job_id)?;
+    Ok(display::format_job_details(&job))
+}
+
+fn handle_history_command(
+    slurm: &SlurmInterface,
+    days: u32,
+    state_filter: Option<&str>,
+    partition: Option<&str>,
+    all_users: bool,
+    limit: usize,
+) -> Result<String> {
+    // Calculate start time
+    let now = chrono::Utc::now();
+    let start = now - chrono::Duration::days(days as i64);
+    let start_time = start.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+    // Get current user if not showing all
+    let username = if all_users {
+        None
+    } else {
+        Some(SlurmInterface::get_current_user())
+    };
+
+    // Parse state filter
+    let states: Option<Vec<String>> = state_filter.map(|s| {
+        s.split(',')
+            .map(|st| st.trim().to_uppercase())
+            .collect()
+    });
+
+    let mut jobs = slurm.get_job_history(
+        username.as_deref(),
+        Some(&start_time),
+        None,
+        states.as_deref(),
+        None,
+        all_users,
+    )?;
+
+    // Filter by partition if specified
+    if let Some(part) = partition {
+        jobs.retain(|j| j.partition.eq_ignore_ascii_case(part));
+    }
+
+    // Sort by job_id descending (most recent first)
+    jobs.sort_by(|a, b| b.job_id.cmp(&a.job_id));
+
+    // Limit results
+    jobs.truncate(limit);
+
+    let mut output = String::new();
+
+    // Header
+    let user_info = if all_users {
+        "all users".to_string()
+    } else {
+        format!("user {}", username.as_deref().unwrap_or("unknown"))
+    };
+
+    output.push_str(&format!(
+        "\nJob History ({}, last {} days, {} jobs)\n\n",
+        user_info,
+        days,
+        jobs.len()
+    ));
+
+    output.push_str(&display::format_job_history(&jobs, true));
+
+    Ok(output)
+}
+
+fn handle_down_command(
+    slurm: &SlurmInterface,
+    partition: Option<&str>,
+    show_all: bool,
+) -> Result<String> {
+    // Get all nodes - only use --all flag when no partition filter
+    let include_hidden = partition.is_none();
+    let nodes = slurm.get_nodes(partition, None, None, include_hidden)?;
+
+    // Filter to only problem nodes
+    let problem_states = if show_all {
+        vec![
+            "DOWN", "DRAIN", "DRAINED", "DRAINING", "FAIL", "MAINT",
+            "NOT_RESPONDING", "RESERVED", "POWERED_DOWN", "POWERING_DOWN",
+            "REBOOT_REQUESTED", "REBOOT_ISSUED",
+        ]
+    } else {
+        // Default: most critical states only
+        vec!["DOWN", "DRAIN", "DRAINED", "DRAINING", "FAIL", "MAINT", "NOT_RESPONDING"]
+    };
+
+    let problem_nodes: Vec<_> = nodes
+        .into_iter()
+        .filter(|node| {
+            let state = node.primary_state().to_uppercase();
+            problem_states.iter().any(|s| state.contains(s))
+                || node.node_state.state.iter().any(|s| {
+                    let s_upper = s.to_uppercase();
+                    problem_states.iter().any(|ps| s_upper.contains(ps))
+                })
+        })
+        .collect();
+
+    Ok(display::format_problem_nodes(&problem_nodes, show_all))
 }

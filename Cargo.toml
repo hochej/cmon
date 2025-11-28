@@ -32,8 +32,27 @@ chrono = { version = "0.4", default-features = false, features = ["std", "serde"
 # Signal handling for Ctrl+C
 ctrlc = "3.4"
 
-# Terminal handling for watch mode
-crossterm = "0.28"
+# Terminal handling for watch mode and TUI input
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# TUI framework
+ratatui = "0.29"
+
+# Async runtime for TUI
+tokio = { version = "1", features = ["full", "rt-multi-thread", "macros", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+
+# Clipboard support for TUI
+arboard = "3"
+
+# Config directory and file parsing
+dirs = "5"
+toml = "0.8"
+
+# Logging for TUI debugging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 3
