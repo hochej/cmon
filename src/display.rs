@@ -394,7 +394,7 @@ pub fn format_jobs(jobs: &[JobInfo], show_all: bool, node_prefix_strip: &str) ->
 
             JobRow {
                 job_id: job.job_id.to_string(),
-                name: job.name.clone(),
+                name: truncate_string(&job.name, 35),
                 user: job.user_name.clone(),
                 partition: job.partition.clone(),
                 state: format_job_state(job),
