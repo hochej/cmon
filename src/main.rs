@@ -168,66 +168,79 @@ fn main() -> Result<()> {
 
     let slurm = SlurmInterface::new();
 
+    // Load config for display settings (shared between CLI and TUI)
+    let config = models::TuiConfig::load();
+
     // Test Slurm connection
     if !slurm.test_connection() {
         eprintln!("Error: Unable to connect to Slurm. Make sure sinfo/squeue are available.");
         std::process::exit(1);
     }
 
+    // Extract config values for display functions
+    let node_prefix = &config.display.node_prefix_strip;
+    let partition_order = &config.display.partition_order;
+
     match cli.command {
         Some(Commands::Jobs { all, user, partition, state, watch }) => {
             if watch > 0.0 {
-                watch_loop(watch, || {
-                    handle_jobs_command(&slurm, all, user.as_deref(), partition.as_deref(), state.as_deref())
+                let prefix = node_prefix.clone();
+                watch_loop(watch, move || {
+                    handle_jobs_command(&slurm, all, user.as_deref(), partition.as_deref(), state.as_deref(), &prefix)
                 })?;
             } else {
-                let output = handle_jobs_command(&slurm, all, user.as_deref(), partition.as_deref(), state.as_deref())?;
+                let output = handle_jobs_command(&slurm, all, user.as_deref(), partition.as_deref(), state.as_deref(), node_prefix)?;
                 println!("{}", output);
             }
         }
         Some(Commands::Nodes { partition, nodelist, all, state, watch }) => {
             if watch > 0.0 {
-                watch_loop(watch, || {
-                    handle_nodes_command(&slurm, partition.as_deref(), nodelist.as_deref(), all, state.as_deref())
+                let prefix = node_prefix.clone();
+                watch_loop(watch, move || {
+                    handle_nodes_command(&slurm, partition.as_deref(), nodelist.as_deref(), all, state.as_deref(), &prefix)
                 })?;
             } else {
-                let output = handle_nodes_command(&slurm, partition.as_deref(), nodelist.as_deref(), all, state.as_deref())?;
+                let output = handle_nodes_command(&slurm, partition.as_deref(), nodelist.as_deref(), all, state.as_deref(), node_prefix)?;
                 println!("{}", output);
             }
         }
         Some(Commands::Status { partition, user, watch }) => {
             if watch > 0.0 {
-                watch_loop(watch, || {
-                    handle_status_command(&slurm, partition.as_deref(), user.as_deref())
+                let prefix = node_prefix.clone();
+                let order = partition_order.clone();
+                watch_loop(watch, move || {
+                    handle_status_command(&slurm, partition.as_deref(), user.as_deref(), &order, &prefix)
                 })?;
             } else {
-                let output = handle_status_command(&slurm, partition.as_deref(), user.as_deref())?;
+                let output = handle_status_command(&slurm, partition.as_deref(), user.as_deref(), partition_order, node_prefix)?;
                 println!("{}", output);
             }
         }
         Some(Commands::Partitions { partition, user, watch }) => {
             if watch > 0.0 {
-                watch_loop(watch, || {
-                    handle_partitions_command(&slurm, partition.as_deref(), user.as_deref())
+                let order = partition_order.clone();
+                watch_loop(watch, move || {
+                    handle_partitions_command(&slurm, partition.as_deref(), user.as_deref(), &order)
                 })?;
             } else {
-                let output = handle_partitions_command(&slurm, partition.as_deref(), user.as_deref())?;
+                let output = handle_partitions_command(&slurm, partition.as_deref(), user.as_deref(), partition_order)?;
                 println!("{}", output);
             }
         }
         Some(Commands::Me { watch }) => {
             let username = SlurmInterface::get_current_user();
             if watch > 0.0 {
-                watch_loop(watch, || {
-                    handle_me_command(&slurm, &username)
+                let prefix = node_prefix.clone();
+                watch_loop(watch, move || {
+                    handle_me_command(&slurm, &username, &prefix)
                 })?;
             } else {
-                let output = handle_me_command(&slurm, &username)?;
+                let output = handle_me_command(&slurm, &username, node_prefix)?;
                 println!("{}", output);
             }
         }
         Some(Commands::Job { job_id }) => {
-            let output = handle_job_command(&slurm, job_id)?;
+            let output = handle_job_command(&slurm, job_id, node_prefix)?;
             println!("{}", output);
         }
         Some(Commands::History { days, state, partition, all, limit }) => {
@@ -236,11 +249,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::Down { partition, all, watch }) => {
             if watch > 0.0 {
-                watch_loop(watch, || {
-                    handle_down_command(&slurm, partition.as_deref(), all)
+                let prefix = node_prefix.clone();
+                watch_loop(watch, move || {
+                    handle_down_command(&slurm, partition.as_deref(), all, &prefix)
                 })?;
             } else {
-                let output = handle_down_command(&slurm, partition.as_deref(), all)?;
+                let output = handle_down_command(&slurm, partition.as_deref(), all, node_prefix)?;
                 println!("{}", output);
             }
         }
@@ -249,7 +263,7 @@ fn main() -> Result<()> {
         }
         None => {
             // Default: show status
-            let output = handle_status_command(&slurm, None, None)?;
+            let output = handle_status_command(&slurm, None, None, partition_order, node_prefix)?;
             println!("{}", output);
         }
     }
@@ -327,6 +341,7 @@ fn handle_jobs_command(
     user: Option<&str>,
     partition: Option<&str>,
     state_filter: Option<&str>,
+    node_prefix_strip: &str,
 ) -> Result<String> {
     let users = user.map(|u| vec![u.to_string()]);
     let partitions = partition.map(|p| vec![p.to_string()]);
@@ -348,7 +363,7 @@ fn handle_jobs_command(
         None,
     )?;
 
-    Ok(display::format_jobs(&jobs, show_all || state_filter.is_some()))
+    Ok(display::format_jobs(&jobs, show_all || state_filter.is_some(), node_prefix_strip))
 }
 
 fn handle_nodes_command(
@@ -357,6 +372,7 @@ fn handle_nodes_command(
     nodelist: Option<&str>,
     all: bool,
     state_filter: Option<&str>,
+    node_prefix_strip: &str,
 ) -> Result<String> {
     // Get all nodes first
     let mut nodes = slurm.get_nodes(partition, nodelist, None, all)?;
@@ -374,20 +390,22 @@ fn handle_nodes_command(
         });
     }
 
-    Ok(display::format_nodes(&nodes))
+    Ok(display::format_nodes(&nodes, node_prefix_strip))
 }
 
 fn handle_status_command(
     slurm: &SlurmInterface,
     partition: Option<&str>,
     user: Option<&str>,
+    partition_order: &[String],
+    node_prefix_strip: &str,
 ) -> Result<String> {
     let status = slurm.get_cluster_status(partition, user, None)?;
 
     let mut output = String::new();
-    output.push_str(&display::format_cluster_status(&status));
+    output.push_str(&display::format_cluster_status(&status, partition_order));
     output.push_str("\n\n");
-    output.push_str(&display::format_nodes(&status.nodes));
+    output.push_str(&display::format_nodes(&status.nodes, node_prefix_strip));
 
     Ok(output)
 }
@@ -396,27 +414,30 @@ fn handle_partitions_command(
     slurm: &SlurmInterface,
     partition: Option<&str>,
     user: Option<&str>,
+    partition_order: &[String],
 ) -> Result<String> {
     let status = slurm.get_cluster_status(partition, user, None)?;
 
     // Only show cluster status and partition utilization, no node table
-    Ok(display::format_cluster_status(&status))
+    Ok(display::format_cluster_status(&status, partition_order))
 }
 
 fn handle_me_command(
     slurm: &SlurmInterface,
     username: &str,
+    node_prefix_strip: &str,
 ) -> Result<String> {
     let summary = slurm.get_personal_summary(username)?;
-    Ok(display::format_personal_summary(&summary))
+    Ok(display::format_personal_summary(&summary, node_prefix_strip))
 }
 
 fn handle_job_command(
     slurm: &SlurmInterface,
     job_id: u64,
+    node_prefix_strip: &str,
 ) -> Result<String> {
     let job = slurm.get_job_details(job_id)?;
-    Ok(display::format_job_details(&job))
+    Ok(display::format_job_details(&job, node_prefix_strip))
 }
 
 fn handle_history_command(
@@ -491,6 +512,7 @@ fn handle_down_command(
     slurm: &SlurmInterface,
     partition: Option<&str>,
     show_all: bool,
+    node_prefix_strip: &str,
 ) -> Result<String> {
     // Get all nodes - only use --all flag when no partition filter
     let include_hidden = partition.is_none();
@@ -520,5 +542,5 @@ fn handle_down_command(
         })
         .collect();
 
-    Ok(display::format_problem_nodes(&problem_nodes, show_all))
+    Ok(display::format_problem_nodes(&problem_nodes, show_all, node_prefix_strip))
 }

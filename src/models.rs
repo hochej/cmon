@@ -1797,6 +1797,16 @@ pub struct DisplayConfig {
     /// Theme name
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    /// Partition display order (empty = alphabetical)
+    /// Example: ["cpu", "gpu", "fat", "vdi"]
+    #[serde(default)]
+    pub partition_order: Vec<String>,
+
+    /// Prefix to strip from node names for display (optional)
+    /// Example: "demu4x" would turn "demu4xcpu01" into "cpu01"
+    #[serde(default)]
+    pub node_prefix_strip: String,
 }
 
 impl Default for DisplayConfig {
@@ -1806,6 +1816,8 @@ impl Default for DisplayConfig {
             show_all_jobs: false,
             show_grouped_by_account: false,
             theme: "dark".to_string(),
+            partition_order: Vec::new(),
+            node_prefix_strip: String::new(),
         }
     }
 }

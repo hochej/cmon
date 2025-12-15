@@ -504,20 +504,27 @@ impl SlurmInterface {
     }
 }
 
-/// Shorten node names by removing 'demu4x' prefix
-pub fn shorten_node_name(node_name: &str) -> &str {
-    node_name.strip_prefix("demu4x").unwrap_or(node_name)
+/// Shorten node names by removing a configurable prefix
+///
+/// If prefix is empty, returns the original name unchanged.
+/// This makes the tool portable across different clusters.
+pub fn shorten_node_name<'a>(node_name: &'a str, prefix: &str) -> &'a str {
+    if prefix.is_empty() {
+        node_name
+    } else {
+        node_name.strip_prefix(prefix).unwrap_or(node_name)
+    }
 }
 
 /// Shorten a comma-separated list of node names
-pub fn shorten_node_list(node_list: &str) -> String {
+pub fn shorten_node_list(node_list: &str, prefix: &str) -> String {
     if node_list.is_empty() {
         return node_list.to_string();
     }
 
     node_list
         .split(',')
-        .map(|node| shorten_node_name(node.trim()))
+        .map(|node| shorten_node_name(node.trim(), prefix))
         .collect::<Vec<_>>()
         .join(",")
 }

@@ -1,7 +1,7 @@
 //! Display and formatting functions for cluster information
 
 use crate::models::{ClusterStatus, JobHistoryInfo, JobInfo, NodeInfo, PersonalSummary, format_duration_seconds};
-use crate::slurm::shorten_node_name;
+use crate::slurm::{shorten_node_name, shorten_node_list};
 use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use tabled::{
@@ -178,7 +178,11 @@ struct NodeRow {
 }
 
 /// Display nodes in a table format
-pub fn format_nodes(nodes: &[NodeInfo]) -> String {
+///
+/// # Arguments
+/// * `nodes` - The nodes to display
+/// * `node_prefix_strip` - Optional prefix to strip from node names (empty = no stripping)
+pub fn format_nodes(nodes: &[NodeInfo], node_prefix_strip: &str) -> String {
     if nodes.is_empty() {
         return "No nodes found".yellow().to_string();
     }
@@ -186,7 +190,7 @@ pub fn format_nodes(nodes: &[NodeInfo]) -> String {
     let rows: Vec<NodeRow> = nodes
         .iter()
         .map(|node| NodeRow {
-            node: shorten_node_name(node.name()).to_string(),
+            node: shorten_node_name(node.name(), node_prefix_strip).to_string(),
             state: format_node_state(node),
             reason: format_node_reason(node),
             cpu: format_cpu_usage(node),
@@ -286,7 +290,7 @@ fn format_state_reason(job: &JobInfo) -> String {
     }
 }
 
-pub fn format_jobs(jobs: &[JobInfo], show_all: bool) -> String {
+pub fn format_jobs(jobs: &[JobInfo], show_all: bool, node_prefix_strip: &str) -> String {
     let filtered_jobs: Vec<&JobInfo> = if show_all {
         jobs.iter().collect()
     } else {
@@ -310,7 +314,7 @@ pub fn format_jobs(jobs: &[JobInfo], show_all: bool) -> String {
                 partition: job.partition.clone(),
                 state: format_job_state(job),
                 reason: format_state_reason(job),
-                nodes: crate::slurm::shorten_node_list(&job.nodes),
+                nodes: shorten_node_list(&job.nodes, node_prefix_strip),
                 cpus: cpus.to_string(),
                 gpus: gpu_info.display,
                 time: job.remaining_time_display(),
@@ -327,7 +331,12 @@ pub fn format_jobs(jobs: &[JobInfo], show_all: bool) -> String {
     table.to_string()
 }
 
-pub fn format_cluster_status(status: &ClusterStatus) -> String {
+/// Format cluster status display
+///
+/// # Arguments
+/// * `status` - The cluster status data
+/// * `partition_order` - Optional ordering for partitions (empty = alphabetical)
+pub fn format_cluster_status(status: &ClusterStatus, partition_order: &[String]) -> String {
     let total_nodes = status.total_nodes();
     let idle_nodes = status.idle_nodes();
     let mixed_nodes = status.mixed_nodes();
@@ -405,7 +414,7 @@ pub fn format_cluster_status(status: &ClusterStatus) -> String {
     output.push_str(&format!("\n{}\n", "╭─────────────────────────── Partition Utilization ────────────────────────────╮".blue()));
     output.push_str(&format!("{}\n", "│                                                                              │".blue()));
 
-    output.push_str(&format_partition_stats(status));
+    output.push_str(&format_partition_stats(status, partition_order));
 
     output.push_str(&format!("{}\n", "╰──────────────────────────────────────────────────────────────────────────────╯".blue()));
 
@@ -444,35 +453,44 @@ fn pad_line(content: &str) -> String {
 }
 
 /// Display partition statistics
-fn format_partition_stats(status: &ClusterStatus) -> String {
+///
+/// Groups nodes by their actual Slurm partition field (portable across clusters).
+/// Partition order can be configured; defaults to alphabetical.
+fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) -> String {
     let mut output = String::new();
-    let mut partitions: HashMap<&str, Vec<&NodeInfo>> = HashMap::new();
-    partitions.insert("CPU Nodes", vec![]);
-    partitions.insert("Fat Nodes", vec![]);
-    partitions.insert("GPU Nodes", vec![]);
-    partitions.insert("VDI Nodes", vec![]);
+    let mut partitions: HashMap<String, Vec<&NodeInfo>> = HashMap::new();
 
-    // Group nodes by type
+    // Group nodes by their actual partition name from Slurm
     for node in &status.nodes {
-        let name = node.name();
-        if name.starts_with("demu4xcpu") {
-            partitions.get_mut("CPU Nodes").unwrap().push(node);
-        } else if name.starts_with("demu4xfat") {
-            partitions.get_mut("Fat Nodes").unwrap().push(node);
-        } else if name.starts_with("demu4xgpu") {
-            partitions.get_mut("GPU Nodes").unwrap().push(node);
-        } else if name.starts_with("demu4xvdi") {
-            partitions.get_mut("VDI Nodes").unwrap().push(node);
+        let partition_name = node.partition.name.clone().unwrap_or_else(|| "unknown".to_string());
+        partitions.entry(partition_name).or_default().push(node);
+    }
+
+    // Determine display order: configured order first, then remaining alphabetically
+    let mut ordered_names: Vec<String> = Vec::new();
+
+    // Add configured partitions in order (if they exist)
+    for name in partition_order {
+        let name_lower = name.to_lowercase();
+        if partitions.contains_key(&name_lower) {
+            ordered_names.push(name_lower);
         }
     }
 
-    // Display each partition in a consistent order
-    let partition_order = ["CPU Nodes", "GPU Nodes", "Fat Nodes", "VDI Nodes"];
-    for name in partition_order {
-        let nodes = &partitions[name];
-        if nodes.is_empty() {
-            continue;
-        }
+    // Add remaining partitions alphabetically
+    let mut remaining: Vec<&String> = partitions.keys()
+        .filter(|k| !ordered_names.contains(k))
+        .collect();
+    remaining.sort();
+    for name in remaining {
+        ordered_names.push(name.clone());
+    }
+
+    for partition_name in ordered_names {
+        let nodes = match partitions.get(&partition_name) {
+            Some(n) if !n.is_empty() => n,
+            _ => continue,
+        };
 
         let node_count = nodes.len();
         let total_cpus: u32 = nodes.iter().map(|n| n.cpus.total).sum();
@@ -491,7 +509,9 @@ fn format_partition_stats(status: &ClusterStatus) -> String {
             0.0
         };
 
-        let header = format!("  {} ({}):", name.bold(), node_count);
+        // Use partition name with first letter capitalized for display
+        let display_name = capitalize_first(&partition_name);
+        let header = format!("  {} ({} nodes):", display_name.bold(), node_count);
         output.push_str(&format!("{}\n", pad_line(&header)));
 
         let cpu_bar = create_bar(cpu_util);
@@ -508,7 +528,7 @@ fn format_partition_stats(status: &ClusterStatus) -> String {
         );
         output.push_str(&format!("{}\n", pad_line(&mem_line)));
 
-        // GPU stats for GPU/Fat partitions
+        // GPU stats (shown only if partition has GPUs)
         let total_gpus: u32 = nodes.iter().map(|n| n.gpu_info().total).sum();
         if total_gpus > 0 {
             let used_gpus: u32 = nodes.iter().map(|n| n.gpu_info().used).sum();
@@ -544,6 +564,15 @@ fn format_partition_stats(status: &ClusterStatus) -> String {
     output
 }
 
+/// Capitalize the first letter of a string
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+    }
+}
+
 /// Create a utilization bar
 fn create_bar(utilization: f64) -> String {
     let bar_length = 20;
@@ -563,7 +592,7 @@ fn create_bar(utilization: f64) -> String {
 }
 
 /// Format personal summary dashboard
-pub fn format_personal_summary(summary: &PersonalSummary) -> String {
+pub fn format_personal_summary(summary: &PersonalSummary, node_prefix_strip: &str) -> String {
     let mut output = String::new();
 
     // Header
@@ -689,7 +718,7 @@ pub fn format_personal_summary(summary: &PersonalSummary) -> String {
     if !summary.current_jobs.is_empty() {
         output.push_str("\n");
         output.push_str(&format!("{}\n", "Current Jobs:".bold()));
-        output.push_str(&format_jobs(&summary.current_jobs, true));
+        output.push_str(&format_jobs(&summary.current_jobs, true, node_prefix_strip));
     }
 
     // Recent jobs table (limit to last 10)
@@ -783,7 +812,7 @@ fn format_job_history_brief(jobs: &[&JobHistoryInfo]) -> String {
 }
 
 /// Format a single job's detailed information
-pub fn format_job_details(job: &JobHistoryInfo) -> String {
+pub fn format_job_details(job: &JobHistoryInfo, node_prefix_strip: &str) -> String {
     let mut output = String::new();
 
     // Header
@@ -808,7 +837,7 @@ pub fn format_job_details(job: &JobHistoryInfo) -> String {
     output.push_str(&format!("{}\n", pad_line(&partition_line)));
 
     if !job.nodes.is_empty() && job.nodes != "None assigned" {
-        let nodes_line = format!("  {} {}", "Nodes:".bold(), crate::slurm::shorten_node_list(&job.nodes));
+        let nodes_line = format!("  {} {}", "Nodes:".bold(), shorten_node_list(&job.nodes, node_prefix_strip));
         output.push_str(&format!("{}\n", pad_line(&nodes_line)));
     }
 
@@ -1203,7 +1232,7 @@ fn find_break_point(s: &str, max_width: usize) -> usize {
 }
 
 /// Format problem nodes summary
-pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool) -> String {
+pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_strip: &str) -> String {
     if nodes.is_empty() {
         let mut output = String::new();
         output.push_str(&format!("\n{}\n", "╭───────────────────────────── Cluster Health ─────────────────────────────────╮".green()));
@@ -1302,13 +1331,13 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool) -> String {
 
     // Detailed table
     output.push_str("\n");
-    output.push_str(&format_problem_nodes_table(nodes));
+    output.push_str(&format_problem_nodes_table(nodes, node_prefix_strip));
 
     output
 }
 
 /// Format problem nodes table with reason column
-fn format_problem_nodes_table(nodes: &[NodeInfo]) -> String {
+fn format_problem_nodes_table(nodes: &[NodeInfo], node_prefix_strip: &str) -> String {
     if nodes.is_empty() {
         return String::new();
     }
@@ -1366,7 +1395,7 @@ fn format_problem_nodes_table(nodes: &[NodeInfo]) -> String {
             };
 
             ProblemNodeRow {
-                node: shorten_node_name(node.name()).to_string(),
+                node: shorten_node_name(node.name(), node_prefix_strip).to_string(),
                 partition: node.partition.name.clone().unwrap_or_default(),
                 state: colored_state,
                 cpus: node.cpus.total.to_string(),

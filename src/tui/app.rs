@@ -1800,23 +1800,27 @@ impl App {
     }
 
     /// Compute partition statistics from nodes data
+    ///
+    /// Groups nodes by their actual Slurm partition name (portable across clusters).
+    /// Display order is configurable via config; defaults to alphabetical.
     pub fn compute_partition_stats(&self) -> Vec<PartitionStatus> {
         let mut partition_map: HashMap<String, Vec<&NodeInfo>> = HashMap::new();
 
-        // Group nodes by partition name
+        // Group nodes by partition name from Slurm
         for node in &self.nodes.data {
             let partition_name = node.partition.name.clone().unwrap_or_else(|| "unknown".to_string());
             partition_map.entry(partition_name).or_default().push(node);
         }
 
-        // Define partition order (customize as needed)
-        let partition_order = ["cpu", "gpu", "fat", "vdi"];
+        // Use configured partition order, or empty (alphabetical) as default
+        let partition_order = &self.config.display.partition_order;
         let mut stats: Vec<PartitionStatus> = Vec::new();
 
-        // First add known partitions in order
+        // First add configured partitions in order (if they exist)
         for name in partition_order {
-            if let Some(nodes) = partition_map.remove(name) {
-                stats.push(compute_partition_from_nodes(name, &nodes));
+            let name_lower = name.to_lowercase();
+            if let Some(nodes) = partition_map.remove(&name_lower) {
+                stats.push(compute_partition_from_nodes(&name_lower, &nodes));
             }
         }
 

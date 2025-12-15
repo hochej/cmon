@@ -6,6 +6,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs};
 
+use crate::slurm::shorten_node_name;
 use crate::tui::app::{App, AppMode, JobState, NodesViewMode, PartitionStatus, PersonalPanel, ProblemsPanel, TuiJobInfo, View};
 use crate::tui::theme::Theme;
 
@@ -457,6 +458,7 @@ fn render_nodes_list(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     let selected = app.nodes_view.list_state.selected;
     let scroll_offset = calculate_scroll_offset(selected, available_height, app.nodes.len());
 
+    let node_prefix = &app.config.display.node_prefix_strip;
     let rows: Vec<Row> = app
         .nodes
         .data
@@ -466,7 +468,7 @@ fn render_nodes_list(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
         .take(available_height)
         .map(|(i, node)| {
             let is_selected = i == selected;
-            node_to_row(node, is_selected, theme)
+            node_to_row(node, is_selected, theme, node_prefix)
         })
         .collect();
 
@@ -516,14 +518,15 @@ fn render_nodes_grid(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Define partition display order
-    let partition_order = ["cpu", "gpu", "fat", "vdi"];
+    // Use configured partition display order (or alphabetical if empty)
+    let partition_order = &app.config.display.partition_order;
     let mut ordered_partitions: Vec<String> = Vec::new();
 
-    // Add known partitions in order
+    // Add configured partitions in order (if they exist)
     for name in partition_order {
-        if nodes_by_partition.contains_key(name) {
-            ordered_partitions.push(name.to_string());
+        let name_lower = name.to_lowercase();
+        if nodes_by_partition.contains_key(&name_lower) {
+            ordered_partitions.push(name_lower);
         }
     }
     // Add remaining partitions alphabetically
@@ -692,6 +695,7 @@ fn node_to_row<'a>(
     node: &'a crate::models::NodeInfo,
     is_selected: bool,
     theme: &Theme,
+    node_prefix_strip: &str,
 ) -> Row<'a> {
     let state = node.primary_state();
     let state_color = theme.node_state_color(state);
@@ -716,7 +720,7 @@ fn node_to_row<'a>(
     };
 
     let cells = vec![
-        Cell::from(shorten_node_name(node.name())),
+        Cell::from(shorten_node_name(node.name(), node_prefix_strip).to_string()),
         Cell::from(truncate_string(&partition, 10)),
         Cell::from(state).style(Style::default().fg(state_color)),
         Cell::from(cpu_info),
@@ -1469,6 +1473,7 @@ fn render_down_nodes_section(
     let available_height = inner.height.saturating_sub(1) as usize;
     let scroll_offset = calculate_scroll_offset(selected_idx, available_height, nodes.len());
 
+    let node_prefix = &app.config.display.node_prefix_strip;
     let rows: Vec<Row> = nodes
         .iter()
         .enumerate()
@@ -1482,7 +1487,7 @@ fn render_down_nodes_section(
             };
 
             let row = Row::new(vec![
-                Cell::from(shorten_node_name(node.name())),
+                Cell::from(shorten_node_name(node.name(), node_prefix).to_string()),
                 Cell::from(node.partition.name.clone().unwrap_or_default()),
                 Cell::from(node.primary_state()).style(Style::default().fg(theme.failed)),
                 Cell::from(reason),
@@ -1550,6 +1555,7 @@ fn render_draining_nodes_section(
     let available_height = inner.height.saturating_sub(1) as usize;
     let scroll_offset = calculate_scroll_offset(selected_idx, available_height, nodes.len());
 
+    let node_prefix = &app.config.display.node_prefix_strip;
     let rows: Vec<Row> = nodes
         .iter()
         .enumerate()
@@ -1563,7 +1569,7 @@ fn render_draining_nodes_section(
             };
 
             let row = Row::new(vec![
-                Cell::from(shorten_node_name(node.name())),
+                Cell::from(shorten_node_name(node.name(), node_prefix).to_string()),
                 Cell::from(node.partition.name.clone().unwrap_or_default()),
                 Cell::from(node.primary_state()).style(Style::default().fg(theme.timeout)),
                 Cell::from(reason),
@@ -1935,11 +1941,6 @@ fn format_duration_display(seconds: u64) -> String {
     } else {
         format!("{:02}:{:02}:{:02}", hours, minutes, secs)
     }
-}
-
-/// Shorten node name by removing common prefixes
-fn shorten_node_name(name: &str) -> String {
-    name.strip_prefix("demu4x").unwrap_or(name).to_string()
 }
 
 /// Create a progress bar as a Span
