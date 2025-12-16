@@ -1,5 +1,8 @@
 //! Display and formatting functions for cluster information
 
+use crate::formatting::{
+    format_bytes, format_bytes_mb, truncate_path, truncate_string,
+};
 use crate::models::{
     ClusterStatus, JobHistoryInfo, JobInfo, NodeInfo, PersonalSummary, format_duration_seconds,
 };
@@ -92,20 +95,6 @@ fn box_empty_colored(color: &str) -> String {
     }
 }
 
-/// Format megabytes to human-readable size (input is in MB)
-pub fn format_bytes(mb: u64) -> String {
-    const KB: u64 = 1024;
-    const GB: u64 = KB;
-    const TB: u64 = GB * 1024;
-
-    if mb >= TB {
-        format!("{:.1}T", mb as f64 / TB as f64)
-    } else if mb >= GB {
-        format!("{:.1}G", mb as f64 / GB as f64)
-    } else {
-        format!("{}M", mb)
-    }
-}
 
 /// Format node state with colored indicator
 #[allow(clippy::if_same_then_else)]
@@ -187,7 +176,7 @@ pub fn format_memory_usage(node: &NodeInfo) -> String {
     let free = node.memory_free();
     let used = total.saturating_sub(free);
 
-    let usage = format!("{}/{}", format_bytes(used), format_bytes(total));
+    let usage = format!("{}/{}", format_bytes_mb(used), format_bytes_mb(total));
 
     let utilization = node.memory_utilization();
     if utilization < 10.0 {
@@ -627,8 +616,8 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
             "    Memory:  {}   {:.0}% ({}/{} GB)",
             mem_bar,
             mem_util,
-            format_bytes(allocated_mem),
-            format_bytes(total_mem)
+            format_bytes_mb(allocated_mem),
+            format_bytes_mb(total_mem)
         );
         output.push_str(&format!("{}\n", pad_line(&mem_line)));
 
@@ -988,7 +977,7 @@ pub fn format_job_details(job: &JobHistoryInfo, node_prefix_strip: &str) -> Stri
 
     let requested_mem = job.requested_memory();
     if requested_mem > 0 {
-        let mem_line = format!("    Memory:     {}", format_bytes_from_bytes(requested_mem));
+        let mem_line = format!("    Memory:     {}", format_bytes(requested_mem));
         output.push_str(&format!("{}\n", pad_line(&mem_line)));
     }
 
@@ -1024,8 +1013,8 @@ pub fn format_job_details(job: &JobHistoryInfo, node_prefix_strip: &str) -> Stri
                 "    Memory:     {} {:.1}% ({} / {})",
                 bar,
                 mem_eff,
-                format_bytes_from_bytes(max_mem),
-                format_bytes_from_bytes(requested_mem)
+                format_bytes(max_mem),
+                format_bytes(requested_mem)
             );
             output.push_str(&format!("{}\n", pad_line(&mem_eff_line)));
         }
@@ -1268,24 +1257,6 @@ fn create_efficiency_bar(efficiency: f64) -> String {
         format!("{}{}", filled_part.yellow(), empty_part.white())
     } else {
         format!("{}{}", filled_part.green(), empty_part.white())
-    }
-}
-
-/// Truncate a string to a maximum length
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
-    }
-}
-
-/// Truncate a path, keeping the end visible
-fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        path.to_string()
-    } else {
-        format!("...{}", &path[path.len().saturating_sub(max_len - 3)..])
     }
 }
 
@@ -1598,37 +1569,18 @@ fn pad_line_colored(content: &str, color: &str) -> String {
     }
 }
 
-/// Format bytes from bytes (not MB) to human-readable
-fn format_bytes_from_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if bytes >= TB {
-        format!("{:.1}T", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.1}G", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1}M", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}K", bytes as f64 / KB as f64)
-    } else {
-        format!("{}B", bytes)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(512), "512M");
-        assert_eq!(format_bytes(1024), "1.0G");
-        assert_eq!(format_bytes(1536), "1.5G");
-        assert_eq!(format_bytes(1048576), "1.0T");
-        assert_eq!(format_bytes(1572864), "1.5T");
+    fn test_format_bytes_mb() {
+        // Tests for format_bytes_mb (MB input -> human readable)
+        assert_eq!(format_bytes_mb(512), "512M");
+        assert_eq!(format_bytes_mb(1024), "1.0G");
+        assert_eq!(format_bytes_mb(1536), "1.5G");
+        assert_eq!(format_bytes_mb(1048576), "1.0T");
+        assert_eq!(format_bytes_mb(1572864), "1.5T");
     }
 
     #[test]

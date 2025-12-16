@@ -4,6 +4,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
+// Re-export formatting functions for backwards compatibility
+pub use crate::formatting::format_duration_human as format_duration_seconds;
+pub use crate::formatting::format_duration_human_minutes as format_duration_minutes;
+
 /// Slurm time value - represents optional/infinite numeric values from Slurm JSON.
 ///
 /// This enum ensures that only valid states are representable:
@@ -1630,46 +1634,6 @@ impl JobHistoryInfo {
     }
 }
 
-/// Format duration from seconds to human-readable
-#[must_use]
-pub fn format_duration_seconds(seconds: u64) -> String {
-    if seconds == 0 {
-        return "0s".to_string();
-    }
-
-    let days = seconds / 86400;
-    let hours = (seconds % 86400) / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let secs = seconds % 60;
-
-    if days > 0 {
-        if hours > 0 {
-            format!("{}d {}h", days, hours)
-        } else {
-            format!("{}d", days)
-        }
-    } else if hours > 0 {
-        if minutes > 0 {
-            format!("{}h {}m", hours, minutes)
-        } else {
-            format!("{}h", hours)
-        }
-    } else if minutes > 0 {
-        if secs > 0 {
-            format!("{}m {}s", minutes, secs)
-        } else {
-            format!("{}m", minutes)
-        }
-    } else {
-        format!("{}s", secs)
-    }
-}
-
-/// Format duration from minutes to human-readable
-#[must_use]
-pub fn format_duration_minutes(minutes: u64) -> String {
-    format_duration_seconds(minutes * 60)
-}
 
 /// Slurm API response wrapper for sacct
 #[derive(Debug, Deserialize, Serialize)]

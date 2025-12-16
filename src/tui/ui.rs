@@ -6,6 +6,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs};
 
+use crate::formatting::{format_bytes_mb, format_duration_hms, truncate_string};
 use crate::slurm::shorten_node_name;
 use crate::models::JobState;
 use crate::tui::app::{
@@ -674,8 +675,8 @@ fn render_node_detail_footer(app: &App, frame: &mut Frame, area: Rect, theme: &T
             Span::styled("Mem: ", Style::default().bold()),
             Span::raw(format!(
                 "{}/{}",
-                format_memory(node.memory.allocated),
-                format_memory(node.memory.minimum)
+                format_bytes_mb(node.memory.allocated),
+                format_bytes_mb(node.memory.minimum)
             )),
             if gpu_info.total > 0 {
                 Span::raw(format!(
@@ -720,8 +721,8 @@ fn node_to_row<'a>(
     let cpu_info = format!("{}/{}", node.cpus.allocated, node.cpus.total);
     let mem_info = format!(
         "{}/{}",
-        format_memory(node.memory.allocated),
-        format_memory(node.memory.minimum)
+        format_bytes_mb(node.memory.allocated),
+        format_bytes_mb(node.memory.minimum)
     );
 
     let gpu = node.gpu_info();
@@ -1203,7 +1204,7 @@ fn render_personal_running_jobs(
                 } else {
                     theme.progress_full // Plenty of time (green)
                 };
-                (format_duration_display(secs), color)
+                (format_duration_hms(secs), color)
             } else {
                 ("N/A".to_string(), theme.border)
             };
@@ -2028,43 +2029,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     .split(popup_layout[1])[1]
 }
 
-/// Truncate a string with ellipsis
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else if max_len <= 3 {
-        s[..max_len].to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
-    }
-}
-
-/// Format memory in human-readable format
-fn format_memory(mb: u64) -> String {
-    if mb >= 1024 * 1024 {
-        format!("{:.1}T", mb as f64 / 1024.0 / 1024.0)
-    } else if mb >= 1024 {
-        format!("{:.0}G", mb as f64 / 1024.0)
-    } else {
-        format!("{}M", mb)
-    }
-}
-
-/// Format duration in human-readable format (HH:MM:SS or D-HH:MM:SS)
-fn format_duration_display(seconds: u64) -> String {
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let secs = seconds % 60;
-
-    if hours >= 24 {
-        let days = hours / 24;
-        let hours = hours % 24;
-        format!("{}-{:02}:{:02}:{:02}", days, hours, minutes, secs)
-    } else {
-        format!("{:02}:{:02}:{:02}", hours, minutes, secs)
-    }
-}
-
 /// Create a progress bar as a Span
 fn create_progress_bar(percent: f64, width: usize, theme: &Theme) -> Span<'static> {
     let filled = ((percent / 100.0) * width as f64).round() as usize;
@@ -2173,7 +2137,7 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
 
     // Time remaining with visual indicator
     if let Some(remaining) = job.time_remaining() {
-        let remaining_str = format_duration_display(remaining.as_secs());
+        let remaining_str = format_duration_hms(remaining.as_secs());
         let remaining_color = if remaining.as_secs() < 3600 {
             theme.progress_crit
         } else if remaining.as_secs() < 6 * 3600 {

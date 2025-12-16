@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
+use crate::formatting::format_duration_hms;
 use crate::models::{
     FairshareNode, FlatFairshareRow, JobInfo, JobState, NodeInfo, SchedulerStats, SshareEntry,
     TuiConfig,
@@ -366,7 +367,7 @@ impl TuiJobInfo {
 
     #[must_use]
     pub fn elapsed_display(&self) -> String {
-        format_duration(self.elapsed_seconds as u64)
+        format_duration_hms(self.elapsed_seconds as u64)
     }
 
     #[must_use]
@@ -374,7 +375,7 @@ impl TuiJobInfo {
         if self.time_limit_seconds == 0 {
             "-".to_string()
         } else {
-            format_duration(self.time_limit_seconds as u64)
+            format_duration_hms(self.time_limit_seconds as u64)
         }
     }
 
@@ -402,21 +403,6 @@ impl TuiJobInfo {
         } else {
             "N/A".to_string()
         }
-    }
-}
-
-/// Format seconds as HH:MM:SS or D-HH:MM:SS
-fn format_duration(seconds: u64) -> String {
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let secs = seconds % 60;
-
-    if hours >= 24 {
-        let days = hours / 24;
-        let hours = hours % 24;
-        format!("{}-{:02}:{:02}:{:02}", days, hours, minutes, secs)
-    } else {
-        format!("{:02}:{:02}:{:02}", hours, minutes, secs)
     }
 }
 
@@ -2671,8 +2657,8 @@ mod tests {
     }
 
     #[test]
-    fn test_format_duration() {
-        assert_eq!(format_duration(3661), "01:01:01");
-        assert_eq!(format_duration(86400 + 3661), "1-01:01:01");
+    fn test_format_duration_hms() {
+        assert_eq!(format_duration_hms(3661), "01:01:01");
+        assert_eq!(format_duration_hms(86400 + 3661), "1-01:01:01");
     }
 }

@@ -1,6 +1,7 @@
 //! cmon - Fast cluster monitoring tool for Slurm
 
 mod display;
+pub mod formatting;
 mod models;
 mod slurm;
 mod tui;
