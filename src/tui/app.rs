@@ -2045,7 +2045,7 @@ impl App {
     pub fn compute_partition_stats(&self) -> Vec<PartitionStatus> {
         let mut partition_map: HashMap<String, Vec<&NodeInfo>> = HashMap::new();
 
-        // Group nodes by partition name from Slurm (normalized to lowercase)
+        // Group nodes by partition name from Slurm (preserves original case)
         for node in self.data.nodes.iter() {
             partition_map
                 .entry(node.partition_name())
@@ -2057,17 +2057,23 @@ impl App {
         let partition_order = &self.config.display.partition_order;
         let mut stats: Vec<PartitionStatus> = Vec::new();
 
-        // First add configured partitions in order (if they exist)
-        for name in partition_order {
-            let name_lower = name.to_lowercase();
-            if let Some(nodes) = partition_map.remove(&name_lower) {
-                stats.push(compute_partition_from_nodes(&name_lower, &nodes));
+        // First add configured partitions in order (case-insensitive match)
+        for config_name in partition_order {
+            // Find the actual partition key that matches case-insensitively
+            if let Some(actual_name) = partition_map
+                .keys()
+                .find(|k| k.eq_ignore_ascii_case(config_name))
+                .cloned()
+            {
+                if let Some(nodes) = partition_map.remove(&actual_name) {
+                    stats.push(compute_partition_from_nodes(&actual_name, &nodes));
+                }
             }
         }
 
-        // Then add any remaining partitions alphabetically
+        // Then add any remaining partitions alphabetically (case-insensitive sort)
         let mut remaining: Vec<_> = partition_map.into_iter().collect();
-        remaining.sort_by(|a, b| a.0.cmp(&b.0));
+        remaining.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
         for (name, nodes) in remaining {
             stats.push(compute_partition_from_nodes(&name, &nodes));
         }

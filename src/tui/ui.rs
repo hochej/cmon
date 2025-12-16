@@ -552,7 +552,7 @@ fn render_nodes_grid(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
 
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!(" {} ", partition_name.to_uppercase()),
+                    format!(" {} ", partition_name),
                     Style::default().fg(theme.account_highlight).bold(),
                 ),
                 Span::styled(
@@ -819,7 +819,7 @@ fn render_partition_card(
 
     let title = format!(
         " {} ({} nodes{}) ",
-        partition.name.to_uppercase(),
+        partition.name,
         partition.total_nodes,
         status_indicator
     );

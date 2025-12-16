@@ -34,10 +34,11 @@ mod box_chars {
 /// Create a centered title box top border
 fn box_top(title: &str) -> String {
     // Calculate padding to center the title
+    // BOX_WIDTH is the content width between corners, so dashes + title = BOX_WIDTH
     let title_len = title.len();
-    let total_dashes = BOX_WIDTH - 2; // -2 for corner characters
-    let left_dashes = (total_dashes - title_len) / 2;
-    let right_dashes = total_dashes - title_len - left_dashes;
+    let total_dashes = BOX_WIDTH - title_len;
+    let left_dashes = total_dashes / 2;
+    let right_dashes = total_dashes - left_dashes;
 
     format!(
         "╭{}{}{}╮",
@@ -555,7 +556,7 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
     let mut output = String::new();
     let mut partitions: HashMap<String, Vec<&NodeInfo>> = HashMap::new();
 
-    // Group nodes by their actual partition name from Slurm (normalized to lowercase)
+    // Group nodes by their actual partition name from Slurm (preserves original case)
     for node in &status.nodes {
         partitions
             .entry(node.partition_name())
@@ -566,20 +567,23 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
     // Determine display order: configured order first, then remaining alphabetically
     let mut ordered_names: Vec<String> = Vec::new();
 
-    // Add configured partitions in order (if they exist)
-    for name in partition_order {
-        let name_lower = name.to_lowercase();
-        if partitions.contains_key(&name_lower) {
-            ordered_names.push(name_lower);
+    // Add configured partitions in order (case-insensitive match to actual partition names)
+    for config_name in partition_order {
+        // Find the actual partition key that matches case-insensitively
+        if let Some(actual_name) = partitions
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(config_name))
+        {
+            ordered_names.push(actual_name.clone());
         }
     }
 
-    // Add remaining partitions alphabetically
+    // Add remaining partitions alphabetically (case-insensitive sort)
     let mut remaining: Vec<&String> = partitions
         .keys()
-        .filter(|k| !ordered_names.contains(k))
+        .filter(|k| !ordered_names.iter().any(|o| o.eq_ignore_ascii_case(k)))
         .collect();
-    remaining.sort();
+    remaining.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
     for name in remaining {
         ordered_names.push(name.clone());
     }
@@ -607,9 +611,8 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
             0.0
         };
 
-        // Use partition name with first letter capitalized for display
-        let display_name = capitalize_first(&partition_name);
-        let header = format!("  {} ({} nodes):", display_name.bold(), node_count);
+        // Use partition name as-is from the cluster (preserve original casing)
+        let header = format!("  {} ({} nodes):", partition_name.bold(), node_count);
         output.push_str(&format!("{}\n", pad_line(&header)));
 
         let cpu_bar = create_bar(cpu_util);
@@ -667,15 +670,6 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
     }
 
     output
-}
-
-/// Capitalize the first letter of a string
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-    }
 }
 
 /// Create a utilization bar

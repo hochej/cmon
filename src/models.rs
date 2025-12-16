@@ -289,14 +289,13 @@ impl NodeInfo {
             .unwrap_or("")
     }
 
-    /// Get the partition name (normalized to lowercase)
+    /// Get the partition name (preserves original casing from Slurm)
     #[must_use]
     pub fn partition_name(&self) -> String {
         self.partition
             .name
             .clone()
             .unwrap_or_else(|| "unknown".to_string())
-            .to_lowercase()
     }
 
     // ========================================================================
