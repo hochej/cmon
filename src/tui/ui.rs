@@ -7,9 +7,10 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs};
 
 use crate::slurm::shorten_node_name;
+use crate::models::JobState;
 use crate::tui::app::{
-    App, JobState, ModalState, NodesViewMode, PartitionStatus, PersonalPanel, ProblemsPanel,
-    TuiJobInfo, View,
+    App, ModalState, NodesViewMode, PartitionStatus, PersonalPanel, ProblemsPanel, TuiJobInfo,
+    View,
 };
 use crate::tui::theme::Theme;
 

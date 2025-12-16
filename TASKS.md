@@ -90,7 +90,7 @@ pub fn is_running(&self) -> bool {
 
 Apply to all 20+ `is_*()` methods in both `JobInfo` and `NodeInfo`.
 
-### 0.2 Consolidate Duplicate JobState Definitions
+### 0.2 Consolidate Duplicate JobState Definitions [DONE]
 
 **Problem:** Two separate implementations:
 - `models::JobInfo` - uses `Vec<String>` with string predicates

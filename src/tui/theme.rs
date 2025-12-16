@@ -5,7 +5,7 @@
 
 use ratatui::style::Color;
 
-use crate::tui::app::JobState;
+use crate::models::JobState;
 
 /// Available theme names
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
