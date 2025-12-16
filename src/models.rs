@@ -667,103 +667,108 @@ pub struct JobInfo {
 }
 
 impl JobInfo {
+    /// Check if job state contains any of the given states (without allocating)
+    fn has_state(&self, states: &[&str]) -> bool {
+        self.state
+            .iter()
+            .any(|s| states.iter().any(|state| s == *state))
+    }
+
     // Base job states
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.state.contains(&"RUNNING".to_string())
+        self.has_state(&["RUNNING"])
     }
 
     #[must_use]
     pub fn is_pending(&self) -> bool {
-        self.state.contains(&"PENDING".to_string())
+        self.has_state(&["PENDING"])
     }
 
     #[must_use]
     pub fn is_suspended(&self) -> bool {
-        self.state.contains(&"SUSPENDED".to_string())
+        self.has_state(&["SUSPENDED"])
     }
 
     #[must_use]
     pub fn is_completed(&self) -> bool {
-        self.state.contains(&"COMPLETED".to_string())
+        self.has_state(&["COMPLETED"])
     }
 
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.state.contains(&"CANCELLED".to_string())
+        self.has_state(&["CANCELLED"])
     }
 
     #[must_use]
     pub fn is_failed(&self) -> bool {
-        self.state.contains(&"FAILED".to_string())
+        self.has_state(&["FAILED"])
     }
 
     #[must_use]
     pub fn is_timeout(&self) -> bool {
-        self.state.contains(&"TIMEOUT".to_string())
+        self.has_state(&["TIMEOUT"])
     }
 
     #[must_use]
     pub fn is_node_fail(&self) -> bool {
-        self.state.contains(&"NODE_FAIL".to_string())
+        self.has_state(&["NODE_FAIL"])
     }
 
     #[must_use]
     pub fn is_preempted(&self) -> bool {
-        self.state.contains(&"PREEMPTED".to_string())
+        self.has_state(&["PREEMPTED"])
     }
 
     #[must_use]
     pub fn is_boot_fail(&self) -> bool {
-        self.state.contains(&"BOOT_FAIL".to_string())
+        self.has_state(&["BOOT_FAIL"])
     }
 
     #[must_use]
     pub fn is_deadline(&self) -> bool {
-        self.state.contains(&"DEADLINE".to_string())
+        self.has_state(&["DEADLINE"])
     }
 
     #[must_use]
     pub fn is_out_of_memory(&self) -> bool {
-        self.state.contains(&"OUT_OF_MEMORY".to_string())
+        self.has_state(&["OUT_OF_MEMORY"])
     }
 
     // Job state flags
     #[must_use]
     pub fn is_completing(&self) -> bool {
-        self.state.contains(&"COMPLETING".to_string())
+        self.has_state(&["COMPLETING"])
     }
 
     #[must_use]
     pub fn is_configuring(&self) -> bool {
-        self.state.contains(&"CONFIGURING".to_string())
+        self.has_state(&["CONFIGURING"])
     }
 
     #[must_use]
     pub fn is_requeued(&self) -> bool {
-        self.state.contains(&"REQUEUED".to_string())
-            || self.state.contains(&"REQUEUE_FED".to_string())
-            || self.state.contains(&"REQUEUE_HOLD".to_string())
+        self.has_state(&["REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD"])
     }
 
     #[must_use]
     pub fn is_resizing(&self) -> bool {
-        self.state.contains(&"RESIZING".to_string())
+        self.has_state(&["RESIZING"])
     }
 
     #[must_use]
     pub fn is_signaling(&self) -> bool {
-        self.state.contains(&"SIGNALING".to_string())
+        self.has_state(&["SIGNALING"])
     }
 
     #[must_use]
     pub fn is_stage_out(&self) -> bool {
-        self.state.contains(&"STAGE_OUT".to_string())
+        self.has_state(&["STAGE_OUT"])
     }
 
     #[must_use]
     pub fn is_stopped(&self) -> bool {
-        self.state.contains(&"STOPPED".to_string())
+        self.has_state(&["STOPPED"])
     }
 
     /// Get the primary job state for display
