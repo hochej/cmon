@@ -126,7 +126,7 @@ impl JobState {
 
 Remove duplicate from `tui/app.rs`, import from models.
 
-### 0.3 Use Iterator Combinators for GPU Parsing
+### 0.3 Use Iterator Combinators for GPU Parsing [DONE]
 
 **File:** `src/models.rs` (lines 862-870)
 

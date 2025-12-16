@@ -966,50 +966,49 @@ impl JobInfo {
     /// Get number of allocated GPUs
     #[must_use]
     pub fn allocated_gpus(&self) -> u32 {
-        let resources = self.allocated_resources();
-
-        for (key, value) in resources.iter() {
-            if key.contains("gres/gpu")
-                && let Ok(count) = value.parse::<u32>()
-            {
-                return count;
-            }
-        }
-
-        0
+        self.allocated_resources()
+            .iter()
+            .filter(|(k, _)| k.contains("gres/gpu"))
+            .find_map(|(_, v)| v.parse::<u32>().ok())
+            .unwrap_or(0)
     }
 
     /// Parse GPU type information
     #[must_use]
     pub fn gpu_type_info(&self) -> JobGpuInfo {
-        let resources = self.allocated_resources();
-        let mut gpu_info = JobGpuInfo {
-            count: 0,
-            gpu_type: String::new(),
-            display: "-".to_string(),
-        };
-
         // Look for specific GPU type allocations like "gres/gpu:l40s"
-        for (key, value) in resources.iter() {
-            if key.contains("gres/gpu:")
-                && let Some(gpu_type) = key.split("gres/gpu:").nth(1)
-                && let Ok(count) = value.parse::<u32>()
-            {
-                gpu_info.count = count;
-                gpu_info.gpu_type = gpu_type.to_uppercase();
-                gpu_info.display = format!("{}x{}", count, gpu_type.to_uppercase());
-                return gpu_info;
-            }
+        if let Some(info) = self
+            .allocated_resources()
+            .iter()
+            .filter(|(k, _)| k.contains("gres/gpu:"))
+            .find_map(|(k, v)| {
+                let gpu_type = k.split("gres/gpu:").nth(1)?;
+                let count = v.parse::<u32>().ok()?;
+                Some(JobGpuInfo {
+                    count,
+                    gpu_type: gpu_type.to_uppercase(),
+                    display: format!("{}x{}", count, gpu_type.to_uppercase()),
+                })
+            })
+        {
+            return info;
         }
 
         // Fallback to generic GPU count
         let gpu_count = self.allocated_gpus();
         if gpu_count > 0 {
-            gpu_info.count = gpu_count;
-            gpu_info.display = gpu_count.to_string();
+            return JobGpuInfo {
+                count: gpu_count,
+                gpu_type: String::new(),
+                display: gpu_count.to_string(),
+            };
         }
 
-        gpu_info
+        JobGpuInfo {
+            count: 0,
+            gpu_type: String::new(),
+            display: "-".to_string(),
+        }
     }
 
     /// Calculate remaining time in minutes
@@ -1844,15 +1843,13 @@ impl SshareEntry {
     /// Get GPU hours from TRES run_seconds
     #[must_use]
     pub fn gpu_hours(&self) -> f64 {
-        let mut total = 0.0;
-        for item in &self.tres.run_seconds {
-            if item.name.starts_with("gres/gpu") {
-                if let Some(val) = item.value.value() {
-                    total += val as f64 / 3600.0;
-                }
-            }
-        }
-        total
+        self.tres
+            .run_seconds
+            .iter()
+            .filter(|item| item.name.starts_with("gres/gpu"))
+            .filter_map(|item| item.value.value())
+            .map(|val| val as f64 / 3600.0)
+            .sum()
     }
 
     /// Get memory GB-hours from TRES run_seconds
