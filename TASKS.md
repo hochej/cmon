@@ -146,16 +146,22 @@ self.allocated_resources()
     .unwrap_or(0)
 ```
 
-### 0.4 Replace Clone with as_deref() Where Appropriate
+### 0.4 Replace Clone with as_deref() Where Appropriate [DONE]
 
 **File:** `src/tui/ui.rs` (line 718 and similar)
 ```rust
-// Current
-let partition = node.partition.name.clone().unwrap_or_default();
+// When you only need &str (not owned):
+let partition = node.partition.name.as_deref().unwrap_or("");
 
-// Better
-let partition = node.partition.name.as_deref().unwrap_or("unknown");
+// When you need owned String with empty default, keep the original:
+let partition: String = node.partition.name.clone().unwrap_or_default();
+
+// When you need owned String with non-empty default:
+let partition: String = node.partition.name.as_deref().unwrap_or("unknown").to_string();
 ```
+
+**Applied to:** TUI code where only `&str` is needed (3 locations in ui.rs).
+**Not applied to:** `display.rs` where owned `String` with empty default is needed.
 
 ---
 

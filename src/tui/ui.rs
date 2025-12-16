@@ -716,7 +716,7 @@ fn node_to_row<'a>(
     let state = node.primary_state();
     let state_color = theme.node_state_color(state);
 
-    let partition = node.partition.name.clone().unwrap_or_default();
+    let partition = node.partition.name.as_deref().unwrap_or("");
     let cpu_info = format!("{}/{}", node.cpus.allocated, node.cpus.total);
     let mem_info = format!(
         "{}/{}",
@@ -737,7 +737,7 @@ fn node_to_row<'a>(
 
     let cells = vec![
         Cell::from(shorten_node_name(node.name(), node_prefix_strip).to_string()),
-        Cell::from(truncate_string(&partition, 10)),
+        Cell::from(truncate_string(partition, 10)),
         Cell::from(state).style(Style::default().fg(state_color)),
         Cell::from(cpu_info),
         Cell::from(mem_info),
@@ -1563,7 +1563,7 @@ fn render_down_nodes_section(
 
             let row = Row::new(vec![
                 Cell::from(shorten_node_name(node.name(), node_prefix).to_string()),
-                Cell::from(node.partition.name.clone().unwrap_or_default()),
+                Cell::from(node.partition.name.as_deref().unwrap_or("")),
                 Cell::from(node.primary_state()).style(Style::default().fg(theme.failed)),
                 Cell::from(reason),
             ]);
@@ -1651,7 +1651,7 @@ fn render_draining_nodes_section(
 
             let row = Row::new(vec![
                 Cell::from(shorten_node_name(node.name(), node_prefix).to_string()),
-                Cell::from(node.partition.name.clone().unwrap_or_default()),
+                Cell::from(node.partition.name.as_deref().unwrap_or("")),
                 Cell::from(node.primary_state()).style(Style::default().fg(theme.timeout)),
                 Cell::from(reason),
             ]);
