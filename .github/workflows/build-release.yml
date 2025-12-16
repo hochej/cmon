@@ -42,7 +42,7 @@ jobs:
       run: cargo test --release
 
     - name: Run clippy
-      run: cargo clippy -- -D warnings || true
+      run: cargo clippy -- -D warnings
 
   build-linux:
     name: Build Linux Binary (RHEL 9 Compatible)

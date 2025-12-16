@@ -7,8 +7,8 @@
 //! The main loop uses `tokio::select!` with bias toward the input channel
 //! to prevent input starvation under heavy data update loads.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -37,6 +37,59 @@ const ANIMATION_TICK_INTERVAL: Duration = Duration::from_millis(200);
 const IDLE_THRESHOLD: Duration = Duration::from_secs(30);
 /// Multiplier applied when idle (2x slowdown)
 const IDLE_MULTIPLIER: f32 = 2.0;
+
+/// Helper function to handle common fetch result patterns.
+///
+/// Consolidates the repeated error handling in fetch_and_send_* functions.
+/// On success, sends the data event. On error, records the error in throttle
+/// and sends a FetchError event with appropriate logging.
+fn handle_fetch_result<T, F>(
+    result: Result<Result<T, anyhow::Error>, tokio::task::JoinError>,
+    tx: &mpsc::Sender<DataEvent>,
+    throttle: &FetcherThrottle,
+    source: DataSource,
+    success_event: F,
+) where
+    F: FnOnce(T) -> DataEvent,
+{
+    match result {
+        Ok(Ok(data)) => {
+            if tx.try_send(success_event(data)).is_err() {
+                throttle.record_backpressure();
+            }
+        }
+        Ok(Err(e)) => {
+            throttle.record_error();
+            if tx
+                .try_send(DataEvent::FetchError {
+                    source,
+                    error: e.to_string(),
+                })
+                .is_err()
+            {
+                tracing::warn!(
+                    "Could not send {} fetch error notification (channel full)",
+                    source
+                );
+            }
+        }
+        Err(e) => {
+            throttle.record_error();
+            if tx
+                .try_send(DataEvent::FetchError {
+                    source,
+                    error: format!("Task join error: {}", e),
+                })
+                .is_err()
+            {
+                tracing::warn!(
+                    "Could not send {} task error notification (channel full)",
+                    source
+                );
+            }
+        }
+    }
+}
 
 /// Shared state for adaptive throttling
 pub struct FetcherThrottle {
@@ -67,6 +120,7 @@ impl Default for FetcherThrottle {
 
 impl FetcherThrottle {
     /// Get the effective multiplier (includes idle detection)
+    #[must_use]
     pub fn get_multiplier(&self) -> f32 {
         let base = self.multiplier.load(Ordering::Relaxed) as f32 / 100.0;
         if self.is_idle() {
@@ -77,6 +131,7 @@ impl FetcherThrottle {
     }
 
     /// Check if the user has been idle for longer than the threshold
+    #[must_use]
     pub fn is_idle(&self) -> bool {
         let last = self.last_activity.load(Ordering::Relaxed);
         let now = self.start_time.elapsed().as_secs();
@@ -174,10 +229,7 @@ impl TuiRuntime {
 }
 
 /// Spawn the input event reader task
-pub fn spawn_input_task(
-    tx: mpsc::Sender<InputEvent>,
-    cancel: CancellationToken,
-) -> JoinHandle<()> {
+pub fn spawn_input_task(tx: mpsc::Sender<InputEvent>, cancel: CancellationToken) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut reader = EventStream::new();
 
@@ -201,8 +253,22 @@ pub fn spawn_input_task(
                                 }
                             }
                         }
-                        Some(Err(_)) => {
-                            // Event read error, continue
+                        Some(Err(e)) => {
+                            // Check for fatal terminal errors that should trigger shutdown
+                            let is_fatal = matches!(
+                                e.kind(),
+                                std::io::ErrorKind::BrokenPipe
+                                    | std::io::ErrorKind::ConnectionReset
+                                    | std::io::ErrorKind::UnexpectedEof
+                            );
+
+                            if is_fatal {
+                                tracing::info!("Terminal disconnected: {:?}", e);
+                                break; // Graceful shutdown on terminal disconnect
+                            } else {
+                                // Log non-fatal errors (signal interruptions, temporary issues)
+                                tracing::warn!("Terminal event read error: {:?}", e);
+                            }
                         }
                         None => break, // Stream ended
                     }
@@ -219,20 +285,26 @@ pub fn spawn_job_fetcher(
     throttle: Arc<FetcherThrottle>,
     username: String,
     show_all: Arc<AtomicBool>,
+    slurm_bin_path: Option<std::path::PathBuf>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let slurm = SlurmInterface::new();
+        let slurm = SlurmInterface::with_config(slurm_bin_path.as_deref());
 
         // Initial fetch immediately
-        fetch_and_send_jobs(&slurm, &tx, &throttle, &username, show_all.load(Ordering::Relaxed))
-            .await;
+        fetch_and_send_jobs(
+            &slurm,
+            &tx,
+            &throttle,
+            &username,
+            show_all.load(Ordering::Relaxed),
+        )
+        .await;
 
         loop {
             // Calculate current interval with throttle multiplier
             let multiplier = throttle.get_multiplier();
-            let current_interval = Duration::from_secs_f32(
-                DEFAULT_JOBS_INTERVAL.as_secs_f32() * multiplier,
-            );
+            let current_interval =
+                Duration::from_secs_f32(DEFAULT_JOBS_INTERVAL.as_secs_f32() * multiplier);
 
             tokio::select! {
                 _ = cancel.cancelled() => break,
@@ -270,29 +342,10 @@ async fn fetch_and_send_jobs(
     })
     .await;
 
-    match result {
-        Ok(Ok(jobs)) => {
-            let tui_jobs: Vec<TuiJobInfo> = jobs.iter().map(TuiJobInfo::from_job_info).collect();
-
-            if tx.try_send(DataEvent::JobsUpdated(tui_jobs)).is_err() {
-                throttle.record_backpressure();
-            }
-        }
-        Ok(Err(e)) => {
-            throttle.record_error();
-            let _ = tx.try_send(DataEvent::FetchError {
-                source: DataSource::Jobs,
-                error: e.to_string(),
-            });
-        }
-        Err(e) => {
-            throttle.record_error();
-            let _ = tx.try_send(DataEvent::FetchError {
-                source: DataSource::Jobs,
-                error: format!("Task join error: {}", e),
-            });
-        }
-    }
+    handle_fetch_result(result, tx, throttle, DataSource::Jobs, |jobs| {
+        let tui_jobs: Vec<TuiJobInfo> = jobs.iter().map(TuiJobInfo::from_job_info).collect();
+        DataEvent::JobsUpdated(tui_jobs)
+    });
 }
 
 /// Spawn the node data fetcher task
@@ -300,9 +353,10 @@ pub fn spawn_node_fetcher(
     tx: mpsc::Sender<DataEvent>,
     cancel: CancellationToken,
     throttle: Arc<FetcherThrottle>,
+    slurm_bin_path: Option<std::path::PathBuf>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let slurm = SlurmInterface::new();
+        let slurm = SlurmInterface::with_config(slurm_bin_path.as_deref());
 
         // Initial fetch immediately
         fetch_and_send_nodes(&slurm, &tx, &throttle).await;
@@ -331,27 +385,13 @@ async fn fetch_and_send_nodes(
     let result =
         tokio::task::spawn_blocking(move || slurm_clone.get_nodes(None, None, None, false)).await;
 
-    match result {
-        Ok(Ok(nodes)) => {
-            if tx.try_send(DataEvent::NodesUpdated(nodes)).is_err() {
-                throttle.record_backpressure();
-            }
-        }
-        Ok(Err(e)) => {
-            throttle.record_error();
-            let _ = tx.try_send(DataEvent::FetchError {
-                source: DataSource::Nodes,
-                error: e.to_string(),
-            });
-        }
-        Err(e) => {
-            throttle.record_error();
-            let _ = tx.try_send(DataEvent::FetchError {
-                source: DataSource::Nodes,
-                error: format!("Task join error: {}", e),
-            });
-        }
-    }
+    handle_fetch_result(
+        result,
+        tx,
+        throttle,
+        DataSource::Nodes,
+        DataEvent::NodesUpdated,
+    );
 }
 
 /// Spawn the fairshare data fetcher task
@@ -360,9 +400,10 @@ pub fn spawn_fairshare_fetcher(
     cancel: CancellationToken,
     throttle: Arc<FetcherThrottle>,
     username: String,
+    slurm_bin_path: Option<std::path::PathBuf>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let slurm = SlurmInterface::new();
+        let slurm = SlurmInterface::with_config(slurm_bin_path.as_deref());
 
         // Initial fetch immediately
         fetch_and_send_fairshare(&slurm, &tx, &throttle, &username).await;
@@ -390,32 +431,17 @@ async fn fetch_and_send_fairshare(
 ) {
     let slurm_clone = slurm.clone();
     let username_owned = username.to_string();
-    let result = tokio::task::spawn_blocking(move || {
-        slurm_clone.get_fairshare(Some(&username_owned), None)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || slurm_clone.get_fairshare(Some(&username_owned), None))
+            .await;
 
-    match result {
-        Ok(Ok(entries)) => {
-            if tx.try_send(DataEvent::FairshareUpdated(entries)).is_err() {
-                throttle.record_backpressure();
-            }
-        }
-        Ok(Err(e)) => {
-            throttle.record_error();
-            let _ = tx.try_send(DataEvent::FetchError {
-                source: DataSource::Fairshare,
-                error: e.to_string(),
-            });
-        }
-        Err(e) => {
-            throttle.record_error();
-            let _ = tx.try_send(DataEvent::FetchError {
-                source: DataSource::Fairshare,
-                error: format!("Task join error: {}", e),
-            });
-        }
-    }
+    handle_fetch_result(
+        result,
+        tx,
+        throttle,
+        DataSource::Fairshare,
+        DataEvent::FairshareUpdated,
+    );
 }
 
 /// Spawn the scheduler stats fetcher task
@@ -426,22 +452,24 @@ pub fn spawn_scheduler_stats_fetcher(
     tx: mpsc::Sender<DataEvent>,
     cancel: CancellationToken,
     throttle: Arc<FetcherThrottle>,
+    slurm_bin_path: Option<std::path::PathBuf>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let slurm = SlurmInterface::new();
+        let slurm = SlurmInterface::with_config(slurm_bin_path.as_deref());
 
         // Initial fetch immediately
-        fetch_and_send_scheduler_stats(&slurm, &tx).await;
+        fetch_and_send_scheduler_stats(&slurm, &tx, &throttle).await;
 
         loop {
             let multiplier = throttle.get_multiplier();
-            let current_interval =
-                Duration::from_secs_f32(DEFAULT_SCHEDULER_STATS_INTERVAL.as_secs_f32() * multiplier);
+            let current_interval = Duration::from_secs_f32(
+                DEFAULT_SCHEDULER_STATS_INTERVAL.as_secs_f32() * multiplier,
+            );
 
             tokio::select! {
                 _ = cancel.cancelled() => break,
                 _ = tokio::time::sleep(current_interval) => {
-                    fetch_and_send_scheduler_stats(&slurm, &tx).await;
+                    fetch_and_send_scheduler_stats(&slurm, &tx, &throttle).await;
                 }
             }
         }
@@ -451,6 +479,7 @@ pub fn spawn_scheduler_stats_fetcher(
 async fn fetch_and_send_scheduler_stats(
     slurm: &SlurmInterface,
     tx: &mpsc::Sender<DataEvent>,
+    throttle: &FetcherThrottle,
 ) {
     let slurm_clone = slurm.clone();
     let result = tokio::task::spawn_blocking(move || slurm_clone.get_scheduler_stats()).await;
@@ -458,10 +487,26 @@ async fn fetch_and_send_scheduler_stats(
     match result {
         Ok(stats) => {
             // Always send stats, even if unavailable (the UI handles this)
-            let _ = tx.try_send(DataEvent::SchedulerStatsUpdated(stats));
+            if tx
+                .try_send(DataEvent::SchedulerStatsUpdated(stats))
+                .is_err()
+            {
+                throttle.record_backpressure();
+                tracing::debug!("Could not send scheduler stats (channel full)");
+            }
         }
-        Err(_) => {
-            // Task join error - scheduler stats are non-critical, just skip
+        Err(e) => {
+            // Task join error - scheduler stats are non-critical, but log for debugging
+            throttle.record_error();
+            if tx
+                .try_send(DataEvent::FetchError {
+                    source: DataSource::SchedulerStats,
+                    error: format!("Task join error: {}", e),
+                })
+                .is_err()
+            {
+                tracing::warn!("Could not send scheduler stats error notification (channel full)");
+            }
         }
     }
 }

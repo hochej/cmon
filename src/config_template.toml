@@ -1,0 +1,57 @@
+# cmon configuration file
+# All settings are optional - cmon works with sensible defaults.
+# Delete any sections or options you don't need.
+
+[system]
+# Path to directory containing Slurm binaries (sinfo, squeue, sacct, etc.)
+# If not set, auto-detected via PATH or falls back to /usr/bin
+# slurm_bin_path = "/opt/slurm/bin"
+
+[display]
+# Default view when launching TUI (jobs, nodes, partitions)
+default_view = "jobs"
+
+# Color theme: "dark" or "light"
+theme = "dark"
+
+# Show all jobs by default (including pending, completed, etc.)
+show_all_jobs = false
+
+# Start TUI with jobs grouped by account
+show_grouped_by_account = false
+
+# Preferred partition display order (empty = alphabetical)
+# Example: partition_order = ["cpu", "gpu", "fat", "vdi"]
+partition_order = []
+
+# Prefix to strip from node names for cleaner display
+# Example: node_prefix_strip = "cluster-" turns "cluster-cpu01" into "cpu01"
+node_prefix_strip = ""
+
+[refresh]
+# Refresh intervals in seconds for different data types
+jobs_interval = 5
+nodes_interval = 10
+fairshare_interval = 60
+
+# Slow down refresh when terminal is idle
+idle_slowdown = true
+
+# Seconds of no input before considered idle
+idle_threshold = 30
+
+[behavior]
+# Require confirmation before cancelling jobs
+confirm_cancel = true
+
+# Enable clipboard support (copy job IDs, node names, etc.)
+copy_to_clipboard = true
+
+# Environment variable overrides (set in shell, not here):
+#   CMON_SLURM_PATH      - Override slurm binary path
+#   CMON_REFRESH_JOBS    - Override jobs refresh interval
+#   CMON_REFRESH_NODES   - Override nodes refresh interval
+#   CMON_DEFAULT_VIEW    - Override default view
+#   CMON_THEME           - Override theme
+#   CMON_NO_CLIPBOARD    - Disable clipboard support
+#   CMON_STRICT_CONFIG   - Set to 1 to make config parse errors fatal

@@ -27,9 +27,11 @@ impl ThemeName {
 /// Color theme for the TUI
 #[derive(Debug, Clone)]
 pub struct Theme {
+    #[allow(dead_code)]
     pub name: ThemeName,
 
     // Base colors
+    #[allow(dead_code)]
     pub bg: Color,
     pub fg: Color,
     pub border: Color,
@@ -57,6 +59,7 @@ pub struct Theme {
 
     // Progress bars
     pub progress_full: Color,
+    #[allow(dead_code)]
     pub progress_empty: Color,
     pub progress_warn: Color,
     pub progress_crit: Color,
@@ -84,17 +87,17 @@ impl Theme {
 
             // Colorblind-safe palette for dark backgrounds
             // Using blue for positive, orange for warning, distinct brightness levels
-            running: Color::Rgb(0, 200, 0),        // Bright green
-            pending: Color::Rgb(255, 180, 0),      // Orange (not yellow - better visibility)
-            completed: Color::Rgb(80, 160, 255),   // Light blue
-            failed: Color::Rgb(255, 80, 80),       // Bright red
+            running: Color::Rgb(0, 200, 0),      // Bright green
+            pending: Color::Rgb(255, 180, 0),    // Orange (not yellow - better visibility)
+            completed: Color::Rgb(80, 160, 255), // Light blue
+            failed: Color::Rgb(255, 80, 80),     // Bright red
             cancelled: Color::DarkGray,
             timeout: Color::Magenta,
 
             // Node state colors (distinct from job colors for clarity)
-            idle: Color::Rgb(100, 180, 100),       // Muted green
-            mixed: Color::Rgb(255, 200, 100),      // Soft amber
-            draining: Color::Rgb(180, 100, 180),   // Muted purple
+            idle: Color::Rgb(100, 180, 100),     // Muted green
+            mixed: Color::Rgb(255, 200, 100),    // Soft amber
+            draining: Color::Rgb(180, 100, 180), // Muted purple
 
             selected_bg: Color::Rgb(60, 60, 80),
             selected_fg: Color::White,
@@ -124,17 +127,17 @@ impl Theme {
 
             // Colorblind-safe palette for light backgrounds
             // Using darker, more saturated versions that contrast well
-            running: Color::Rgb(0, 140, 0),        // Dark green
-            pending: Color::Rgb(200, 120, 0),      // Dark orange
-            completed: Color::Rgb(0, 80, 180),     // Dark blue
-            failed: Color::Rgb(200, 0, 0),         // Dark red
-            cancelled: Color::Rgb(100, 100, 100),  // Medium gray
-            timeout: Color::Rgb(160, 0, 160),      // Dark magenta
+            running: Color::Rgb(0, 140, 0),       // Dark green
+            pending: Color::Rgb(200, 120, 0),     // Dark orange
+            completed: Color::Rgb(0, 80, 180),    // Dark blue
+            failed: Color::Rgb(200, 0, 0),        // Dark red
+            cancelled: Color::Rgb(100, 100, 100), // Medium gray
+            timeout: Color::Rgb(160, 0, 160),     // Dark magenta
 
             // Node state colors for light theme
-            idle: Color::Rgb(60, 120, 60),         // Dark muted green
-            mixed: Color::Rgb(180, 140, 60),       // Dark amber
-            draining: Color::Rgb(140, 60, 140),    // Dark muted purple
+            idle: Color::Rgb(60, 120, 60),      // Dark muted green
+            mixed: Color::Rgb(180, 140, 60),    // Dark amber
+            draining: Color::Rgb(140, 60, 140), // Dark muted purple
 
             selected_bg: Color::Rgb(200, 220, 255),
             selected_fg: Color::Black,
