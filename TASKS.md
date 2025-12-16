@@ -167,7 +167,7 @@ let partition: String = node.partition.name.as_deref().unwrap_or("unknown").to_s
 
 ## Phase 1: Create Shared Formatting Module
 
-### 1.1 Create `src/formatting.rs`
+### 1.1 Create `src/formatting.rs` [DONE]
 
 Consolidate duplicated functions from across the codebase:
 
@@ -210,7 +210,7 @@ pub mod thresholds {
 }
 ```
 
-### 1.2 Update Imports
+### 1.2 Update Imports [DONE]
 
 - `display.rs`: Remove local `truncate_string`, `format_bytes`, import from `formatting`
 - `tui/ui.rs`: Remove local `truncate_string`, `format_memory`, `format_duration_display`
