@@ -1,24 +1,131 @@
 //! Data models for Slurm JSON responses
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
-/// Slurm time value structure
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct TimeValue {
-    pub set: bool,
-    pub infinite: bool,
-    pub number: u64,
+/// Slurm time value - represents optional/infinite numeric values from Slurm JSON.
+///
+/// This enum ensures that only valid states are representable:
+/// - `NotSet`: The value was not set in Slurm (set=false)
+/// - `Infinite`: The value represents infinity (set=true, infinite=true)
+/// - `Value(u64)`: A concrete numeric value (set=true, infinite=false)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum TimeValue {
+    /// Value not set (Slurm JSON: set=false)
+    #[default]
+    NotSet,
+    /// Infinite/unlimited value (Slurm JSON: set=true, infinite=true)
+    Infinite,
+    /// Concrete numeric value (Slurm JSON: set=true, infinite=false, number=N)
+    Value(u64),
 }
 
 impl TimeValue {
-    pub fn to_timestamp(&self) -> Option<DateTime<Utc>> {
-        if self.set && !self.infinite {
-            DateTime::from_timestamp(self.number as i64, 0)
-        } else {
-            None
+    /// Returns the numeric value if set and not infinite.
+    #[must_use]
+    pub fn value(&self) -> Option<u64> {
+        match self {
+            TimeValue::Value(n) => Some(*n),
+            _ => None,
         }
+    }
+
+    /// Returns the numeric value, or 0 if not set or infinite.
+    /// Useful for backwards-compatible field access patterns.
+    #[must_use]
+    pub fn number(&self) -> u64 {
+        match self {
+            TimeValue::Value(n) => *n,
+            _ => 0,
+        }
+    }
+
+    /// Returns true if this value is set (either Value or Infinite).
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        !matches!(self, TimeValue::NotSet)
+    }
+
+    /// Returns true if this value represents infinity.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn is_infinite(&self) -> bool {
+        matches!(self, TimeValue::Infinite)
+    }
+
+    /// Convert to a timestamp if this is a concrete value.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn to_timestamp(&self) -> Option<DateTime<Utc>> {
+        match self {
+            TimeValue::Value(n) => DateTime::from_timestamp(*n as i64, 0),
+            _ => None,
+        }
+    }
+
+    /// Create a TimeValue from explicit set/infinite/number fields.
+    /// Used internally for deserialization.
+    #[must_use]
+    fn from_fields(set: bool, infinite: bool, number: u64) -> Self {
+        if !set {
+            TimeValue::NotSet
+        } else if infinite {
+            TimeValue::Infinite
+        } else {
+            TimeValue::Value(number)
+        }
+    }
+}
+
+/// Internal struct for deserializing Slurm's JSON format
+#[derive(Deserialize)]
+struct TimeValueRaw {
+    #[serde(default)]
+    set: bool,
+    #[serde(default)]
+    infinite: bool,
+    #[serde(default)]
+    number: u64,
+}
+
+impl<'de> Deserialize<'de> for TimeValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = TimeValueRaw::deserialize(deserializer)?;
+        Ok(TimeValue::from_fields(raw.set, raw.infinite, raw.number))
+    }
+}
+
+impl Serialize for TimeValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("TimeValue", 3)?;
+        match self {
+            TimeValue::NotSet => {
+                state.serialize_field("set", &false)?;
+                state.serialize_field("infinite", &false)?;
+                state.serialize_field("number", &0u64)?;
+            }
+            TimeValue::Infinite => {
+                state.serialize_field("set", &true)?;
+                state.serialize_field("infinite", &true)?;
+                state.serialize_field("number", &0u64)?;
+            }
+            TimeValue::Value(n) => {
+                state.serialize_field("set", &true)?;
+                state.serialize_field("infinite", &false)?;
+                state.serialize_field("number", n)?;
+            }
+        }
+        state.end()
     }
 }
 
@@ -34,6 +141,8 @@ pub struct FloatValue {
 }
 
 impl FloatValue {
+    #[allow(dead_code)]
+    #[must_use]
     pub fn value(&self) -> Option<f64> {
         if self.set && !self.infinite {
             Some(self.number)
@@ -160,6 +269,7 @@ pub enum ReasonInfo {
 }
 
 impl ReasonInfo {
+    #[must_use]
     pub fn description(&self) -> &str {
         match self {
             ReasonInfo::Empty => "",
@@ -170,120 +280,161 @@ impl ReasonInfo {
 }
 
 impl NodeInfo {
+    #[must_use]
     pub fn name(&self) -> &str {
-        self.node_names.nodes.first().map(|s| s.as_str()).unwrap_or("")
+        self.node_names
+            .nodes
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("")
     }
 
-    // Primary node states
+    /// Get the partition name (normalized to lowercase)
+    #[must_use]
+    pub fn partition_name(&self) -> String {
+        self.partition
+            .name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
+            .to_lowercase()
+    }
+
+    // ========================================================================
+    // Node State Helpers
+    // ========================================================================
+
+    /// Check if node has any of the specified states
+    /// This is a generic helper that reduces repetition across is_* methods
+    fn has_state(&self, states: &[&str]) -> bool {
+        self.node_state
+            .state
+            .iter()
+            .any(|s| states.iter().any(|state| s == *state))
+    }
+
+    // Primary node states - all use has_state() for consistency
+    #[must_use]
     pub fn is_allocated(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "ALLOCATED" || s == "ALLOC")
+        self.has_state(&["ALLOCATED", "ALLOC"])
     }
 
+    #[must_use]
     pub fn is_completing(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "COMPLETING" || s == "COMP")
+        self.has_state(&["COMPLETING", "COMP"])
     }
 
+    #[must_use]
     pub fn is_down(&self) -> bool {
-        self.node_state.state.contains(&"DOWN".to_string())
+        self.has_state(&["DOWN"])
     }
 
+    #[must_use]
     pub fn is_drained(&self) -> bool {
-        self.node_state.state.contains(&"DRAINED".to_string())
+        self.has_state(&["DRAINED"])
     }
 
+    #[must_use]
     pub fn is_draining(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "DRAINING" || s == "DRAIN" || s == "DRNG")
+        self.has_state(&["DRAINING", "DRAIN", "DRNG"])
     }
 
+    #[must_use]
     pub fn is_fail(&self) -> bool {
-        self.node_state.state.contains(&"FAIL".to_string())
+        self.has_state(&["FAIL"])
     }
 
+    #[must_use]
     pub fn is_failing(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "FAILING" || s == "FAILG")
+        self.has_state(&["FAILING", "FAILG"])
     }
 
+    #[must_use]
     pub fn is_future(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "FUTURE" || s == "FUTR")
+        self.has_state(&["FUTURE", "FUTR"])
     }
 
+    #[must_use]
     pub fn is_idle(&self) -> bool {
-        self.node_state.state.contains(&"IDLE".to_string())
+        self.has_state(&["IDLE"])
     }
 
+    #[must_use]
     pub fn is_maint(&self) -> bool {
-        self.node_state.state.contains(&"MAINT".to_string())
+        self.has_state(&["MAINT"])
     }
 
+    #[must_use]
     pub fn is_mixed(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "MIXED" || s == "MIX")
+        self.has_state(&["MIXED", "MIX"])
     }
 
+    #[must_use]
     pub fn is_perfctrs(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "PERFCTRS" || s == "NPC")
+        self.has_state(&["PERFCTRS", "NPC"])
     }
 
+    #[must_use]
     pub fn is_planned(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "PLANNED" || s == "PLND")
+        self.has_state(&["PLANNED", "PLND"])
     }
 
+    #[must_use]
     pub fn is_power_down(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "POWER_DOWN" || s == "POW_DN")
+        self.has_state(&["POWER_DOWN", "POW_DN"])
     }
 
+    #[must_use]
     pub fn is_powered_down(&self) -> bool {
-        self.node_state.state.contains(&"POWERED_DOWN".to_string())
+        self.has_state(&["POWERED_DOWN"])
     }
 
+    #[must_use]
     pub fn is_powering_down(&self) -> bool {
-        self.node_state.state.contains(&"POWERING_DOWN".to_string())
+        self.has_state(&["POWERING_DOWN"])
     }
 
+    #[must_use]
     pub fn is_powering_up(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "POWERING_UP" || s == "POW_UP")
+        self.has_state(&["POWERING_UP", "POW_UP"])
     }
 
+    #[must_use]
     pub fn is_reserved(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "RESERVED" || s == "RESV")
+        self.has_state(&["RESERVED", "RESV"])
     }
 
+    #[must_use]
     pub fn is_unknown(&self) -> bool {
-        self.node_state.state.iter()
-            .any(|s| s == "UNKNOWN" || s == "UNK")
+        self.has_state(&["UNKNOWN", "UNK"])
     }
 
+    #[must_use]
     pub fn is_reboot_requested(&self) -> bool {
-        self.node_state.state.contains(&"REBOOT_REQUESTED".to_string())
+        self.has_state(&["REBOOT_REQUESTED"])
     }
 
+    #[must_use]
     pub fn is_reboot_issued(&self) -> bool {
-        self.node_state.state.contains(&"REBOOT_ISSUED".to_string())
+        self.has_state(&["REBOOT_ISSUED"])
     }
 
+    #[must_use]
     pub fn is_inval(&self) -> bool {
-        self.node_state.state.contains(&"INVAL".to_string())
+        self.has_state(&["INVAL"])
     }
 
+    #[must_use]
     pub fn is_cloud(&self) -> bool {
-        self.node_state.state.contains(&"CLOUD".to_string())
+        self.has_state(&["CLOUD"])
     }
 
+    #[must_use]
     pub fn is_blocked(&self) -> bool {
-        self.node_state.state.contains(&"BLOCKED".to_string())
+        self.has_state(&["BLOCKED"])
     }
 
     /// Get the primary node state for display
+    #[must_use]
     pub fn primary_state(&self) -> &str {
         // Priority order: show most critical state first
 
@@ -374,33 +525,42 @@ impl NodeInfo {
         }
 
         // Fallback
-        self.node_state.state.first().map(|s| s.as_str()).unwrap_or("UNKNOWN")
+        self.node_state
+            .state
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("UNKNOWN")
     }
 
     /// Get node reason description
+    #[must_use]
     pub fn reason_description(&self) -> &str {
         self.reason.description()
     }
 
+    #[must_use]
     pub fn memory_total(&self) -> u64 {
         self.memory.minimum
     }
 
+    #[must_use]
     pub fn memory_free(&self) -> u64 {
-        self.memory.free.minimum.number
+        self.memory.free.minimum.number()
     }
 
+    #[must_use]
     pub fn memory_utilization(&self) -> f64 {
         if self.memory.minimum == 0 {
             0.0
         } else {
-            let free = self.memory.free.minimum.number;
+            let free = self.memory.free.minimum.number();
             let used = self.memory.minimum.saturating_sub(free);
             (used as f64 / self.memory.minimum as f64) * 100.0
         }
     }
 
     /// Parse GPU information from GRES string
+    #[must_use]
     pub fn gpu_info(&self) -> GpuInfo {
         let mut gpu_info = GpuInfo {
             total: 0,
@@ -509,86 +669,106 @@ pub struct JobInfo {
 
 impl JobInfo {
     // Base job states
+    #[must_use]
     pub fn is_running(&self) -> bool {
         self.state.contains(&"RUNNING".to_string())
     }
 
+    #[must_use]
     pub fn is_pending(&self) -> bool {
         self.state.contains(&"PENDING".to_string())
     }
 
+    #[must_use]
     pub fn is_suspended(&self) -> bool {
         self.state.contains(&"SUSPENDED".to_string())
     }
 
+    #[must_use]
     pub fn is_completed(&self) -> bool {
         self.state.contains(&"COMPLETED".to_string())
     }
 
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.state.contains(&"CANCELLED".to_string())
     }
 
+    #[must_use]
     pub fn is_failed(&self) -> bool {
         self.state.contains(&"FAILED".to_string())
     }
 
+    #[must_use]
     pub fn is_timeout(&self) -> bool {
         self.state.contains(&"TIMEOUT".to_string())
     }
 
+    #[must_use]
     pub fn is_node_fail(&self) -> bool {
         self.state.contains(&"NODE_FAIL".to_string())
     }
 
+    #[must_use]
     pub fn is_preempted(&self) -> bool {
         self.state.contains(&"PREEMPTED".to_string())
     }
 
+    #[must_use]
     pub fn is_boot_fail(&self) -> bool {
         self.state.contains(&"BOOT_FAIL".to_string())
     }
 
+    #[must_use]
     pub fn is_deadline(&self) -> bool {
         self.state.contains(&"DEADLINE".to_string())
     }
 
+    #[must_use]
     pub fn is_out_of_memory(&self) -> bool {
         self.state.contains(&"OUT_OF_MEMORY".to_string())
     }
 
     // Job state flags
+    #[must_use]
     pub fn is_completing(&self) -> bool {
         self.state.contains(&"COMPLETING".to_string())
     }
 
+    #[must_use]
     pub fn is_configuring(&self) -> bool {
         self.state.contains(&"CONFIGURING".to_string())
     }
 
+    #[must_use]
     pub fn is_requeued(&self) -> bool {
         self.state.contains(&"REQUEUED".to_string())
             || self.state.contains(&"REQUEUE_FED".to_string())
             || self.state.contains(&"REQUEUE_HOLD".to_string())
     }
 
+    #[must_use]
     pub fn is_resizing(&self) -> bool {
         self.state.contains(&"RESIZING".to_string())
     }
 
+    #[must_use]
     pub fn is_signaling(&self) -> bool {
         self.state.contains(&"SIGNALING".to_string())
     }
 
+    #[must_use]
     pub fn is_stage_out(&self) -> bool {
         self.state.contains(&"STAGE_OUT".to_string())
     }
 
+    #[must_use]
     pub fn is_stopped(&self) -> bool {
         self.state.contains(&"STOPPED".to_string())
     }
 
     /// Get the primary job state for display
+    #[must_use]
     pub fn primary_state(&self) -> &str {
         // Check flags first (they take precedence in display)
         if self.is_completing() {
@@ -655,11 +835,14 @@ impl JobInfo {
         self.state.first().map(|s| s.as_str()).unwrap_or("UNKNOWN")
     }
 
+    #[allow(dead_code)]
+    #[must_use]
     pub fn is_array_job(&self) -> bool {
-        self.array_job_id.number != 0
+        self.array_job_id.number() != 0
     }
 
     /// Parse allocated resources from TRES string
+    #[must_use]
     pub fn allocated_resources(&self) -> HashMap<String, String> {
         let mut resources = HashMap::new();
 
@@ -673,6 +856,7 @@ impl JobInfo {
     }
 
     /// Get number of allocated GPUs
+    #[must_use]
     pub fn allocated_gpus(&self) -> u32 {
         let resources = self.allocated_resources();
 
@@ -688,6 +872,7 @@ impl JobInfo {
     }
 
     /// Parse GPU type information
+    #[must_use]
     pub fn gpu_type_info(&self) -> JobGpuInfo {
         let resources = self.allocated_resources();
         let mut gpu_info = JobGpuInfo {
@@ -720,22 +905,23 @@ impl JobInfo {
     }
 
     /// Calculate remaining time in minutes
+    #[must_use]
     pub fn remaining_time_minutes(&self) -> Option<i64> {
-        if !self.time_limit.set || !self.start_time.set {
-            return None;
-        }
+        let time_limit = self.time_limit.value()?;
+        let start_time = self.start_time.value()?;
 
         let now = Utc::now().timestamp();
-        let elapsed = now - self.start_time.number as i64;
+        let elapsed = now - start_time as i64;
         let elapsed_minutes = elapsed / 60;
 
-        let time_limit_minutes = self.time_limit.number as i64;
+        let time_limit_minutes = time_limit as i64;
         let remaining = time_limit_minutes - elapsed_minutes;
 
         Some(remaining.max(0))
     }
 
     /// Format remaining time for display
+    #[must_use]
     pub fn remaining_time_display(&self) -> String {
         match self.remaining_time_minutes() {
             None => "-".to_string(),
@@ -798,30 +984,37 @@ pub struct ClusterStatus {
 }
 
 impl ClusterStatus {
+    #[must_use]
     pub fn total_nodes(&self) -> usize {
         self.nodes.len()
     }
 
+    #[must_use]
     pub fn idle_nodes(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_idle()).count()
     }
 
+    #[must_use]
     pub fn down_nodes(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_down()).count()
     }
 
+    #[must_use]
     pub fn mixed_nodes(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_mixed()).count()
     }
 
+    #[must_use]
     pub fn total_cpus(&self) -> u32 {
         self.nodes.iter().map(|n| n.cpus.total).sum()
     }
 
+    #[must_use]
     pub fn allocated_cpus(&self) -> u32 {
         self.nodes.iter().map(|n| n.cpus.allocated).sum()
     }
 
+    #[must_use]
     pub fn cpu_utilization(&self) -> f64 {
         let total = self.total_cpus();
         if total == 0 {
@@ -1090,62 +1283,78 @@ pub struct JobAssociation {
 
 impl JobHistoryInfo {
     /// Get primary state string
+    #[must_use]
     pub fn primary_state(&self) -> &str {
-        self.state.current.first().map(|s| s.as_str()).unwrap_or("UNKNOWN")
+        self.state
+            .current
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("UNKNOWN")
     }
 
     /// Check if job completed successfully
+    #[must_use]
     pub fn is_completed(&self) -> bool {
         self.state.current.iter().any(|s| s == "COMPLETED")
     }
 
     /// Check if job failed
+    #[must_use]
     pub fn is_failed(&self) -> bool {
         self.state.current.iter().any(|s| s == "FAILED")
     }
 
     /// Check if job timed out
+    #[must_use]
     pub fn is_timeout(&self) -> bool {
         self.state.current.iter().any(|s| s == "TIMEOUT")
     }
 
     /// Check if job was cancelled
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.state.current.iter().any(|s| s == "CANCELLED" || s.starts_with("CANCELLED"))
+        self.state
+            .current
+            .iter()
+            .any(|s| s == "CANCELLED" || s.starts_with("CANCELLED"))
     }
 
     /// Check if job ran out of memory
+    #[must_use]
     pub fn is_out_of_memory(&self) -> bool {
         self.state.current.iter().any(|s| s == "OUT_OF_MEMORY")
     }
 
     /// Check if job is running
+    #[must_use]
     pub fn is_running(&self) -> bool {
         self.state.current.iter().any(|s| s == "RUNNING")
     }
 
     /// Check if job is pending
+    #[must_use]
     pub fn is_pending(&self) -> bool {
         self.state.current.iter().any(|s| s == "PENDING")
     }
 
     /// Get elapsed time in human-readable format
+    #[must_use]
     pub fn elapsed_display(&self) -> String {
         format_duration_seconds(self.time.elapsed)
     }
 
     /// Get time limit in human-readable format
+    #[must_use]
     pub fn time_limit_display(&self) -> String {
-        if self.time.limit.set && !self.time.limit.infinite {
-            format_duration_minutes(self.time.limit.number)
-        } else if self.time.limit.infinite {
-            "UNLIMITED".to_string()
-        } else {
-            "-".to_string()
+        match &self.time.limit {
+            TimeValue::Value(n) => format_duration_minutes(*n),
+            TimeValue::Infinite => "UNLIMITED".to_string(),
+            TimeValue::NotSet => "-".to_string(),
         }
     }
 
     /// Calculate CPU efficiency percentage
+    #[must_use]
     pub fn cpu_efficiency(&self) -> Option<f64> {
         let elapsed = self.time.elapsed;
         let cpus = self.required.cpus;
@@ -1158,8 +1367,8 @@ impl JobHistoryInfo {
         let total_cpu_time = elapsed as f64 * cpus as f64;
 
         // Actual CPU time used (user + system)
-        let used_cpu_time = self.time.total.seconds as f64 +
-            (self.time.total.microseconds as f64 / 1_000_000.0);
+        let used_cpu_time =
+            self.time.total.seconds as f64 + (self.time.total.microseconds as f64 / 1_000_000.0);
 
         if total_cpu_time > 0.0 {
             Some((used_cpu_time / total_cpu_time) * 100.0)
@@ -1169,8 +1378,10 @@ impl JobHistoryInfo {
     }
 
     /// Get maximum memory used from steps
+    #[must_use]
     pub fn max_memory_used(&self) -> u64 {
-        self.steps.iter()
+        self.steps
+            .iter()
             .filter_map(|step| step.statistics.as_ref())
             .filter_map(|stats| stats.memory.as_ref())
             .map(|mem| mem.max.task.bytes)
@@ -1179,16 +1390,21 @@ impl JobHistoryInfo {
     }
 
     /// Get requested memory in bytes
+    #[must_use]
     pub fn requested_memory(&self) -> u64 {
         // Memory per node takes precedence
-        if self.required.memory_per_node.set && self.required.memory_per_node.number > 0 {
-            // Memory is in MB
-            return self.required.memory_per_node.number * 1024 * 1024;
+        if let Some(mem) = self.required.memory_per_node.value() {
+            if mem > 0 {
+                // Memory is in MB
+                return mem * 1024 * 1024;
+            }
         }
 
         // Fall back to memory per CPU * CPUs
-        if self.required.memory_per_cpu.set && self.required.memory_per_cpu.number > 0 {
-            return self.required.memory_per_cpu.number * self.required.cpus as u64 * 1024 * 1024;
+        if let Some(mem) = self.required.memory_per_cpu.value() {
+            if mem > 0 {
+                return mem * self.required.cpus as u64 * 1024 * 1024;
+            }
         }
 
         // Try to get from TRES
@@ -1202,6 +1418,7 @@ impl JobHistoryInfo {
     }
 
     /// Calculate memory efficiency percentage
+    #[must_use]
     pub fn memory_efficiency(&self) -> Option<f64> {
         let max_used = self.max_memory_used();
         let requested = self.requested_memory();
@@ -1214,6 +1431,7 @@ impl JobHistoryInfo {
     }
 
     /// Get number of allocated GPUs
+    #[must_use]
     pub fn allocated_gpus(&self) -> u32 {
         for tres in &self.tres.allocated {
             if tres.tres_type == "gres" && tres.name.starts_with("gpu") {
@@ -1224,21 +1442,25 @@ impl JobHistoryInfo {
     }
 
     /// Get GPU type
+    #[must_use]
     pub fn gpu_type(&self) -> Option<String> {
         for tres in &self.tres.allocated {
-            if tres.tres_type == "gres" && tres.name.contains(':') {
-                if let Some(gpu_type) = tres.name.split(':').nth(1) {
-                    return Some(gpu_type.to_uppercase());
-                }
+            if tres.tres_type == "gres"
+                && tres.name.contains(':')
+                && let Some(gpu_type) = tres.name.split(':').nth(1)
+            {
+                return Some(gpu_type.to_uppercase());
             }
         }
         None
     }
 
     /// Get exit code as string
+    #[allow(dead_code)]
+    #[must_use]
     pub fn exit_code_display(&self) -> String {
-        if self.exit_code.return_code.set {
-            format!("{}", self.exit_code.return_code.number)
+        if let Some(code) = self.exit_code.return_code.value() {
+            format!("{}", code)
         } else if !self.exit_code.signal.name.is_empty() {
             format!("SIG{}", self.exit_code.signal.name)
         } else {
@@ -1247,38 +1469,45 @@ impl JobHistoryInfo {
     }
 
     /// Get submit time as formatted string
+    #[must_use]
     pub fn submit_time_display(&self) -> String {
-        if self.time.submission > 0 {
-            if let Some(dt) = DateTime::from_timestamp(self.time.submission as i64, 0) {
-                return dt.format("%Y-%m-%d %H:%M:%S").to_string();
-            }
+        if self.time.submission > 0
+            && let Some(dt) = DateTime::from_timestamp(self.time.submission as i64, 0)
+        {
+            return dt.format("%Y-%m-%d %H:%M:%S").to_string();
         }
         "-".to_string()
     }
 
     /// Get start time as formatted string
+    #[must_use]
     pub fn start_time_display(&self) -> String {
-        if self.time.start > 0 {
-            if let Some(dt) = DateTime::from_timestamp(self.time.start as i64, 0) {
-                return dt.format("%Y-%m-%d %H:%M:%S").to_string();
-            }
+        if self.time.start > 0
+            && let Some(dt) = DateTime::from_timestamp(self.time.start as i64, 0)
+        {
+            return dt.format("%Y-%m-%d %H:%M:%S").to_string();
         }
         "-".to_string()
     }
 
     /// Get end time as formatted string
+    #[must_use]
     pub fn end_time_display(&self) -> String {
-        if self.time.end > 0 {
-            if let Some(dt) = DateTime::from_timestamp(self.time.end as i64, 0) {
-                return dt.format("%Y-%m-%d %H:%M:%S").to_string();
-            }
+        if self.time.end > 0
+            && let Some(dt) = DateTime::from_timestamp(self.time.end as i64, 0)
+        {
+            return dt.format("%Y-%m-%d %H:%M:%S").to_string();
         }
         "-".to_string()
     }
 
     /// Get wait time (time between submission and start)
+    #[must_use]
     pub fn wait_time(&self) -> Option<u64> {
-        if self.time.submission > 0 && self.time.start > 0 && self.time.start >= self.time.submission {
+        if self.time.submission > 0
+            && self.time.start > 0
+            && self.time.start >= self.time.submission
+        {
             Some(self.time.start - self.time.submission)
         } else {
             None
@@ -1286,6 +1515,7 @@ impl JobHistoryInfo {
     }
 
     /// Get wait time display
+    #[must_use]
     pub fn wait_time_display(&self) -> String {
         self.wait_time()
             .map(format_duration_seconds)
@@ -1294,6 +1524,7 @@ impl JobHistoryInfo {
 }
 
 /// Format duration from seconds to human-readable
+#[must_use]
 pub fn format_duration_seconds(seconds: u64) -> String {
     if seconds == 0 {
         return "0s".to_string();
@@ -1328,6 +1559,7 @@ pub fn format_duration_seconds(seconds: u64) -> String {
 }
 
 /// Format duration from minutes to human-readable
+#[must_use]
 pub fn format_duration_minutes(minutes: u64) -> String {
     format_duration_seconds(minutes * 60)
 }
@@ -1463,6 +1695,7 @@ pub struct SshareFairshare {
 
 impl SshareEntry {
     /// Get shares as a fraction (0.0 to 1.0)
+    #[must_use]
     pub fn shares_fraction(&self) -> f64 {
         if self.shares_normalized.set {
             self.shares_normalized.number
@@ -1472,6 +1705,7 @@ impl SshareEntry {
     }
 
     /// Get fairshare factor (0.0 to 1.0, higher is better)
+    #[must_use]
     pub fn fairshare_factor(&self) -> f64 {
         if self.fairshare.factor.set {
             self.fairshare.factor.number
@@ -1481,37 +1715,48 @@ impl SshareEntry {
     }
 
     /// Check if this is a user entry (has a parent that's an account)
+    #[must_use]
     pub fn is_user(&self) -> bool {
         !self.parent.is_empty() && self.parent != "root"
     }
 
     /// Get CPU hours from TRES run_seconds
+    #[must_use]
     pub fn cpu_hours(&self) -> f64 {
         for item in &self.tres.run_seconds {
-            if item.name == "cpu" && item.value.set {
-                return item.value.number as f64 / 3600.0;
+            if item.name == "cpu" {
+                if let Some(val) = item.value.value() {
+                    return val as f64 / 3600.0;
+                }
             }
         }
         0.0
     }
 
     /// Get GPU hours from TRES run_seconds
+    #[must_use]
     pub fn gpu_hours(&self) -> f64 {
         let mut total = 0.0;
         for item in &self.tres.run_seconds {
-            if item.name.starts_with("gres/gpu") && item.value.set {
-                total += item.value.number as f64 / 3600.0;
+            if item.name.starts_with("gres/gpu") {
+                if let Some(val) = item.value.value() {
+                    total += val as f64 / 3600.0;
+                }
             }
         }
         total
     }
 
     /// Get memory GB-hours from TRES run_seconds
+    #[allow(dead_code)]
+    #[must_use]
     pub fn mem_gb_hours(&self) -> f64 {
         for item in &self.tres.run_seconds {
-            if item.name == "mem" && item.value.set {
-                // Memory is in MB-seconds, convert to GB-hours
-                return item.value.number as f64 / (1024.0 * 3600.0);
+            if item.name == "mem" {
+                if let Some(val) = item.value.value() {
+                    // Memory is in MB-seconds, convert to GB-hours
+                    return val as f64 / (1024.0 * 3600.0);
+                }
             }
         }
         0.0
@@ -1522,6 +1767,7 @@ impl SshareEntry {
 #[derive(Debug, Clone)]
 pub struct FairshareNode {
     pub name: String,
+    #[allow(dead_code)]
     pub parent: String,
     pub depth: usize,
     pub is_user: bool,
@@ -1549,7 +1795,12 @@ impl FairshareNode {
         root_nodes
     }
 
-    fn build_node(entry: &SshareEntry, all_entries: &[SshareEntry], depth: usize, current_user: &str) -> Self {
+    fn build_node(
+        entry: &SshareEntry,
+        all_entries: &[SshareEntry],
+        depth: usize,
+        current_user: &str,
+    ) -> Self {
         let mut node = FairshareNode {
             name: entry.name.clone(),
             parent: entry.parent.clone(),
@@ -1566,7 +1817,8 @@ impl FairshareNode {
         // Find children (entries whose parent matches this name)
         for child_entry in all_entries {
             if child_entry.parent == entry.name {
-                let child_node = Self::build_node(child_entry, all_entries, depth + 1, current_user);
+                let child_node =
+                    Self::build_node(child_entry, all_entries, depth + 1, current_user);
                 node.children.push(child_node);
             }
         }
@@ -1575,6 +1827,7 @@ impl FairshareNode {
     }
 
     /// Flatten the tree for display with proper indentation
+    #[must_use]
     pub fn flatten(&self) -> Vec<FlatFairshareRow> {
         let mut rows = Vec::new();
         self.flatten_recursive(&mut rows);
@@ -1616,6 +1869,7 @@ pub struct FlatFairshareRow {
 
 impl FlatFairshareRow {
     /// Get display name with tree indentation
+    #[must_use]
     pub fn display_name(&self) -> String {
         let indent = "  ".repeat(self.depth);
         let prefix = if self.has_children { "+" } else { "-" };
@@ -1627,78 +1881,107 @@ impl FlatFairshareRow {
 // Scheduler stats (sdiag) models (Phase 4)
 // ============================================================================
 
-/// Scheduler statistics from sdiag
+/// Main scheduler cycle statistics (microseconds)
 #[derive(Debug, Clone, Default)]
-pub struct SchedulerStats {
-    /// Jobs currently in queue
-    pub jobs_pending: Option<u64>,
-    pub jobs_running: Option<u64>,
+pub struct CycleStats {
+    pub last_us: Option<u64>,
+    pub mean_us: Option<u64>,
+    pub max_us: Option<u64>,
+}
 
-    /// Main scheduler cycle times (microseconds)
+/// Backfill scheduler statistics
+#[derive(Debug, Clone, Default)]
+pub struct BackfillStats {
     pub last_cycle_us: Option<u64>,
-    pub mean_cycle_us: Option<u64>,
-    pub max_cycle_us: Option<u64>,
+    pub queue_length: Option<u64>,
+    pub last_depth: Option<u64>,
+    pub total_jobs_since_start: Option<u64>,
+}
 
-    /// Backfill statistics
-    pub backfill_last_cycle_us: Option<u64>,
-    pub backfill_queue_length: Option<u64>,
-    pub backfill_last_depth: Option<u64>,
-    pub backfill_total_jobs_since_start: Option<u64>,
-
-    /// When this was fetched
-    pub fetched_at: Option<std::time::Instant>,
-
-    /// Whether sdiag is available (permission may be denied)
-    pub available: bool,
+/// Scheduler statistics from sdiag
+///
+/// This enum ensures that invalid states are unrepresentable:
+/// - When available, we have full statistics
+/// - When unavailable, we have a reason explaining why
+#[derive(Debug, Clone)]
+pub enum SchedulerStats {
+    /// Scheduler stats successfully retrieved
+    Available {
+        jobs_pending: Option<u64>,
+        jobs_running: Option<u64>,
+        cycles: CycleStats,
+        backfill: BackfillStats,
+        #[allow(dead_code)]
+        fetched_at: std::time::Instant,
+    },
+    /// Scheduler stats unavailable (permission denied, command failed, etc.)
+    Unavailable {
+        #[allow(dead_code)]
+        reason: String,
+    },
 }
 
 impl SchedulerStats {
     /// Parse sdiag text output
     pub fn from_sdiag_output(output: &str) -> Self {
-        let mut stats = SchedulerStats {
-            available: true,
-            fetched_at: Some(std::time::Instant::now()),
-            ..Default::default()
-        };
+        let mut cycles = CycleStats::default();
+        let mut backfill = BackfillStats::default();
+        let mut jobs_pending = None;
+        let mut jobs_running = None;
 
         for line in output.lines() {
             let line = line.trim();
 
             // Main scheduler stats
             if line.starts_with("Last cycle:") {
-                stats.last_cycle_us = Self::parse_microseconds(line);
+                cycles.last_us = Self::parse_microseconds(line);
             } else if line.starts_with("Mean cycle:") {
-                stats.mean_cycle_us = Self::parse_microseconds(line);
+                cycles.mean_us = Self::parse_microseconds(line);
             } else if line.starts_with("Max cycle:") {
-                stats.max_cycle_us = Self::parse_microseconds(line);
+                cycles.max_us = Self::parse_microseconds(line);
             } else if line.starts_with("Jobs pending:") {
-                stats.jobs_pending = Self::parse_number(line);
+                jobs_pending = Self::parse_number(line);
             } else if line.starts_with("Jobs running:") {
-                stats.jobs_running = Self::parse_number(line);
+                jobs_running = Self::parse_number(line);
             }
             // Backfill stats
             else if line.contains("Backfill") && line.contains("Last cycle") {
-                stats.backfill_last_cycle_us = Self::parse_microseconds(line);
+                backfill.last_cycle_us = Self::parse_microseconds(line);
             } else if line.contains("Backfill") && line.contains("queue length") {
-                stats.backfill_queue_length = Self::parse_number(line);
+                backfill.queue_length = Self::parse_number(line);
             } else if line.contains("Backfill") && line.contains("depth") {
-                stats.backfill_last_depth = Self::parse_number(line);
+                backfill.last_depth = Self::parse_number(line);
             } else if line.contains("Total backfilled jobs") {
-                stats.backfill_total_jobs_since_start = Self::parse_number(line);
+                backfill.total_jobs_since_start = Self::parse_number(line);
             }
         }
 
-        stats
+        SchedulerStats::Available {
+            jobs_pending,
+            jobs_running,
+            cycles,
+            backfill,
+            fetched_at: std::time::Instant::now(),
+        }
+    }
+
+    /// Create an unavailable stats instance with a reason
+    pub fn unavailable(reason: String) -> Self {
+        SchedulerStats::Unavailable { reason }
+    }
+
+    /// Check if stats are available
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        matches!(self, SchedulerStats::Available { .. })
     }
 
     fn parse_microseconds(line: &str) -> Option<u64> {
         // Parse lines like "Last cycle:   1234 microseconds"
         let parts: Vec<&str> = line.split_whitespace().collect();
         for (i, part) in parts.iter().enumerate() {
-            if *part == "microseconds" || part.starts_with("microsec") {
-                if i > 0 {
-                    return parts[i - 1].parse().ok();
-                }
+            if (*part == "microseconds" || part.starts_with("microsec")) && i > 0 {
+                return parts[i - 1].parse().ok();
             }
         }
         None
@@ -1707,23 +1990,34 @@ impl SchedulerStats {
     fn parse_number(line: &str) -> Option<u64> {
         // Parse lines like "Jobs pending:  1234"
         if let Some((_prefix, suffix)) = line.split_once(':') {
-            return suffix.trim().split_whitespace().next()?.parse().ok();
+            return suffix.split_whitespace().next()?.parse().ok();
         }
         None
     }
 
     /// Check if scheduler is healthy (mean cycle < 5 seconds)
+    /// Returns None if stats are unavailable or mean cycle is unknown
+    #[must_use]
     pub fn is_healthy(&self) -> Option<bool> {
-        self.mean_cycle_us.map(|us| us < 5_000_000)
+        match self {
+            SchedulerStats::Available { cycles, .. } => {
+                cycles.mean_us.map(|us| us < 5_000_000)
+            }
+            SchedulerStats::Unavailable { .. } => None,
+        }
     }
 
     /// Format mean cycle for display
+    #[must_use]
     pub fn mean_cycle_display(&self) -> String {
-        match self.mean_cycle_us {
-            Some(us) if us < 1000 => format!("{}us", us),
-            Some(us) if us < 1_000_000 => format!("{:.1}ms", us as f64 / 1000.0),
-            Some(us) => format!("{:.1}s", us as f64 / 1_000_000.0),
-            None => "N/A".to_string(),
+        match self {
+            SchedulerStats::Available { cycles, .. } => match cycles.mean_us {
+                Some(us) if us < 1000 => format!("{}us", us),
+                Some(us) if us < 1_000_000 => format!("{:.1}ms", us as f64 / 1000.0),
+                Some(us) => format!("{:.1}s", us as f64 / 1_000_000.0),
+                None => "N/A".to_string(),
+            },
+            SchedulerStats::Unavailable { .. } => "N/A".to_string(),
         }
     }
 }
@@ -1736,6 +2030,9 @@ impl SchedulerStats {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct TuiConfig {
     #[serde(default)]
+    pub system: SystemConfig,
+
+    #[serde(default)]
     pub refresh: RefreshConfig,
 
     #[serde(default)]
@@ -1743,6 +2040,15 @@ pub struct TuiConfig {
 
     #[serde(default)]
     pub behavior: BehaviorConfig,
+}
+
+/// System configuration for paths and environment
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SystemConfig {
+    /// Path to directory containing Slurm binaries (sinfo, squeue, etc.)
+    /// If empty or not set, auto-detected via PATH
+    #[serde(default)]
+    pub slurm_bin_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1777,6 +2083,79 @@ impl Default for RefreshConfig {
             idle_slowdown: true,
             idle_threshold: 30,
         }
+    }
+}
+
+/// Minimum allowed refresh interval in seconds (prevents tight polling loops)
+const MIN_REFRESH_INTERVAL: u64 = 1;
+
+/// Minimum idle threshold in seconds
+const MIN_IDLE_THRESHOLD: u64 = 1;
+
+impl RefreshConfig {
+    /// Validate refresh configuration values.
+    /// Returns a list of warnings for invalid values that were corrected to defaults.
+    /// If `strict` is true, returns Err instead of correcting values.
+    pub fn validate(&mut self, strict: bool) -> Result<Vec<String>, String> {
+        let mut warnings = Vec::new();
+        let defaults = Self::default();
+
+        // Validate jobs_interval
+        if self.jobs_interval < MIN_REFRESH_INTERVAL {
+            let msg = format!(
+                "refresh.jobs_interval must be at least {} second(s), got {}",
+                MIN_REFRESH_INTERVAL, self.jobs_interval
+            );
+            if strict {
+                return Err(msg);
+            }
+            warnings.push(format!("{} - using default ({})", msg, defaults.jobs_interval));
+            self.jobs_interval = defaults.jobs_interval;
+        }
+
+        // Validate nodes_interval
+        if self.nodes_interval < MIN_REFRESH_INTERVAL {
+            let msg = format!(
+                "refresh.nodes_interval must be at least {} second(s), got {}",
+                MIN_REFRESH_INTERVAL, self.nodes_interval
+            );
+            if strict {
+                return Err(msg);
+            }
+            warnings.push(format!("{} - using default ({})", msg, defaults.nodes_interval));
+            self.nodes_interval = defaults.nodes_interval;
+        }
+
+        // Validate fairshare_interval
+        if self.fairshare_interval < MIN_REFRESH_INTERVAL {
+            let msg = format!(
+                "refresh.fairshare_interval must be at least {} second(s), got {}",
+                MIN_REFRESH_INTERVAL, self.fairshare_interval
+            );
+            if strict {
+                return Err(msg);
+            }
+            warnings.push(format!(
+                "{} - using default ({})",
+                msg, defaults.fairshare_interval
+            ));
+            self.fairshare_interval = defaults.fairshare_interval;
+        }
+
+        // Validate idle_threshold (only relevant if idle_slowdown is enabled)
+        if self.idle_slowdown && self.idle_threshold < MIN_IDLE_THRESHOLD {
+            let msg = format!(
+                "refresh.idle_threshold must be at least {} second(s), got {}",
+                MIN_IDLE_THRESHOLD, self.idle_threshold
+            );
+            if strict {
+                return Err(msg);
+            }
+            warnings.push(format!("{} - using default ({})", msg, defaults.idle_threshold));
+            self.idle_threshold = defaults.idle_threshold;
+        }
+
+        Ok(warnings)
     }
 }
 
@@ -1842,60 +2221,198 @@ impl Default for BehaviorConfig {
     }
 }
 
-fn default_jobs_interval() -> u64 { 5 }
-fn default_nodes_interval() -> u64 { 10 }
-fn default_fairshare_interval() -> u64 { 60 }
-fn default_idle_threshold() -> u64 { 30 }
-fn default_true() -> bool { true }
-fn default_view() -> String { "jobs".to_string() }
-fn default_theme() -> String { "dark".to_string() }
+fn default_jobs_interval() -> u64 {
+    5
+}
+fn default_nodes_interval() -> u64 {
+    10
+}
+fn default_fairshare_interval() -> u64 {
+    60
+}
+fn default_idle_threshold() -> u64 {
+    30
+}
+fn default_true() -> bool {
+    true
+}
+fn default_view() -> String {
+    "jobs".to_string()
+}
+fn default_theme() -> String {
+    "dark".to_string()
+}
 
 impl TuiConfig {
-    /// Load configuration from files and environment
-    pub fn load() -> Self {
-        let mut config = Self::default();
-
-        // Try to load from /etc/cmon/config.toml
-        if let Ok(content) = std::fs::read_to_string("/etc/cmon/config.toml") {
-            if let Ok(site) = toml::from_str::<TuiConfig>(&content) {
-                config.merge(site);
-            }
+    /// Get the user config file path, respecting XDG_CONFIG_HOME
+    ///
+    /// Resolution order:
+    /// 1. $XDG_CONFIG_HOME/cmon/config.toml (if XDG_CONFIG_HOME is set)
+    /// 2. $HOME/.config/cmon/config.toml (if HOME is set)
+    /// 3. dirs::config_dir()/cmon/config.toml (fallback using dirs crate)
+    /// 4. None if no config directory can be determined
+    #[must_use]
+    pub fn user_config_path() -> Option<std::path::PathBuf> {
+        // Prefer XDG_CONFIG_HOME if set
+        if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME")
+            && !xdg_config.is_empty()
+        {
+            return Some(std::path::PathBuf::from(xdg_config).join("cmon/config.toml"));
         }
 
-        // Try to load from ~/.config/cmon/config.toml
+        // Fall back to ~/.config
         if let Some(home) = std::env::var_os("HOME") {
-            let user_path = std::path::PathBuf::from(home)
-                .join(".config/cmon/config.toml");
-            if let Ok(content) = std::fs::read_to_string(&user_path) {
-                if let Ok(user) = toml::from_str::<TuiConfig>(&content) {
-                    config.merge(user);
-                }
-            }
+            return Some(std::path::PathBuf::from(home).join(".config/cmon/config.toml"));
+        }
+
+        // Last resort: use dirs crate
+        dirs::config_dir().map(|dir| dir.join("cmon/config.toml"))
+    }
+
+    /// Load configuration from files and environment.
+    /// Returns the config and any warnings encountered during loading.
+    pub fn load() -> (Self, Vec<String>) {
+        let mut config = Self::default();
+        let mut warnings = Vec::new();
+        let strict = Self::is_strict_mode();
+
+        // Try to load from /etc/cmon/config.toml
+        Self::load_config_file(&mut config, "/etc/cmon/config.toml", &mut warnings);
+
+        // Try to load from user config path (respects XDG_CONFIG_HOME)
+        if let Some(user_path) = Self::user_config_path() {
+            Self::load_config_file(&mut config, &user_path.to_string_lossy(), &mut warnings);
         }
 
         // Apply environment overrides
         config.apply_env_overrides();
 
-        config
+        // Validate refresh intervals
+        match config.refresh.validate(strict) {
+            Ok(validation_warnings) => warnings.extend(validation_warnings),
+            Err(err) => {
+                eprintln!("Error: {}", err);
+                eprintln!("(CMON_STRICT_CONFIG is set - config errors are fatal)");
+                std::process::exit(1);
+            }
+        }
+
+        (config, warnings)
+    }
+
+    /// Check if strict config mode is enabled via CMON_STRICT_CONFIG
+    fn is_strict_mode() -> bool {
+        std::env::var("CMON_STRICT_CONFIG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    /// Load a config file, collecting warnings on parse errors but not on missing files.
+    /// If CMON_STRICT_CONFIG=1 is set, parse errors cause immediate exit.
+    fn load_config_file(config: &mut Self, path: &str, warnings: &mut Vec<String>) {
+        let strict = Self::is_strict_mode();
+
+        match std::fs::read_to_string(path) {
+            Ok(content) => match toml::from_str::<TuiConfig>(&content) {
+                Ok(parsed) => config.merge(parsed),
+                Err(e) => {
+                    if strict {
+                        eprintln!("Error: Failed to parse config file '{}': {}", path, e);
+                        eprintln!("(CMON_STRICT_CONFIG is set - config errors are fatal)");
+                        std::process::exit(1);
+                    } else {
+                        // Collect warning for display in TUI status bar
+                        warnings.push(format!("Config parse error in '{}': {}", path, e));
+                    }
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File not found is expected and not an error
+            }
+            Err(e) => {
+                // Other errors (permissions, etc.) should be reported
+                if strict {
+                    eprintln!("Error: Could not read config file '{}': {}", path, e);
+                    eprintln!("(CMON_STRICT_CONFIG is set - config errors are fatal)");
+                    std::process::exit(1);
+                } else {
+                    warnings.push(format!("Could not read config '{}': {}", path, e));
+                }
+            }
+        }
     }
 
     fn merge(&mut self, other: TuiConfig) {
+        // Prefer other's slurm_bin_path if set, otherwise keep current
+        self.system.slurm_bin_path = other
+            .system
+            .slurm_bin_path
+            .or(self.system.slurm_bin_path.take());
         self.refresh = other.refresh;
         self.display = other.display;
         self.behavior = other.behavior;
     }
 
     fn apply_env_overrides(&mut self) {
+        let strict = Self::is_strict_mode();
+
+        // System overrides
+        if let Ok(val) = std::env::var("CMON_SLURM_PATH")
+            && !val.is_empty()
+        {
+            let path = std::path::PathBuf::from(&val);
+            if path.is_dir() {
+                self.system.slurm_bin_path = Some(path);
+            } else {
+                Self::report_env_error(
+                    strict,
+                    "CMON_SLURM_PATH",
+                    &val,
+                    "not a valid directory",
+                );
+            }
+        }
+
         if let Ok(val) = std::env::var("CMON_REFRESH_JOBS") {
-            if let Ok(secs) = val.parse() {
-                self.refresh.jobs_interval = secs;
+            match val.parse::<u64>() {
+                Ok(secs) if secs >= MIN_REFRESH_INTERVAL => {
+                    self.refresh.jobs_interval = secs;
+                }
+                Ok(_) => Self::report_env_error(
+                    strict,
+                    "CMON_REFRESH_JOBS",
+                    &val,
+                    &format!("must be at least {} second(s)", MIN_REFRESH_INTERVAL),
+                ),
+                Err(_) => Self::report_env_error(
+                    strict,
+                    "CMON_REFRESH_JOBS",
+                    &val,
+                    "expected a positive integer (seconds)",
+                ),
             }
         }
+
         if let Ok(val) = std::env::var("CMON_REFRESH_NODES") {
-            if let Ok(secs) = val.parse() {
-                self.refresh.nodes_interval = secs;
+            match val.parse::<u64>() {
+                Ok(secs) if secs >= MIN_REFRESH_INTERVAL => {
+                    self.refresh.nodes_interval = secs;
+                }
+                Ok(_) => Self::report_env_error(
+                    strict,
+                    "CMON_REFRESH_NODES",
+                    &val,
+                    &format!("must be at least {} second(s)", MIN_REFRESH_INTERVAL),
+                ),
+                Err(_) => Self::report_env_error(
+                    strict,
+                    "CMON_REFRESH_NODES",
+                    &val,
+                    "expected a positive integer (seconds)",
+                ),
             }
         }
+
         if let Ok(val) = std::env::var("CMON_DEFAULT_VIEW") {
             self.display.default_view = val;
         }
@@ -1904,6 +2421,20 @@ impl TuiConfig {
         }
         if std::env::var("CMON_NO_CLIPBOARD").is_ok() {
             self.behavior.copy_to_clipboard = false;
+        }
+    }
+
+    /// Report an environment variable error, exiting if strict mode is enabled
+    fn report_env_error(strict: bool, var_name: &str, value: &str, reason: &str) {
+        if strict {
+            eprintln!("Error: Invalid value '{}' for {}: {}", value, var_name, reason);
+            eprintln!("(CMON_STRICT_CONFIG is set - config errors are fatal)");
+            std::process::exit(1);
+        } else {
+            eprintln!(
+                "Warning: Invalid value '{}' for {}, {} - using default",
+                value, var_name, reason
+            );
         }
     }
 }
@@ -1921,31 +2452,50 @@ mod tests {
             node_state: NodeState {
                 state: states.iter().map(|s| s.to_string()).collect(),
             },
-            partition: PartitionInfo { name: Some("test".to_string()) },
+            partition: PartitionInfo {
+                name: Some("test".to_string()),
+            },
             cpus: CpuInfo {
                 allocated: 0,
                 idle: 128,
                 total: 128,
-                load: MinMaxValue { minimum: 0, maximum: 0 },
+                load: MinMaxValue {
+                    minimum: 0,
+                    maximum: 0,
+                },
             },
             memory: MemoryInfo {
                 minimum: 1024000,
                 allocated: 0,
                 free: MemoryFreeInfo {
-                    minimum: TimeValue { set: true, infinite: false, number: 1024000 },
-                    maximum: TimeValue { set: true, infinite: false, number: 1024000 },
+                    minimum: TimeValue::Value(1024000),
+                    maximum: TimeValue::Value(1024000),
                 },
             },
             gres: GresInfo {
                 total: String::new(),
                 used: String::new(),
             },
-            sockets: MinMaxValue { minimum: 2, maximum: 2 },
-            cores: MinMaxValue { minimum: 32, maximum: 32 },
-            threads: MinMaxValue { minimum: 64, maximum: 64 },
-            features: FeatureInfo { total: String::new() },
+            sockets: MinMaxValue {
+                minimum: 2,
+                maximum: 2,
+            },
+            cores: MinMaxValue {
+                minimum: 32,
+                maximum: 32,
+            },
+            threads: MinMaxValue {
+                minimum: 64,
+                maximum: 64,
+            },
+            features: FeatureInfo {
+                total: String::new(),
+            },
             reason: ReasonInfo::Empty,
-            weight: MinMaxValue { minimum: 1, maximum: 1 },
+            weight: MinMaxValue {
+                minimum: 1,
+                maximum: 1,
+            },
         }
     }
 
@@ -1962,8 +2512,8 @@ mod tests {
             state: states.iter().map(|s| s.to_string()).collect(),
             nodes: String::new(),
             tres_alloc_str: String::new(),
-            cpus_per_task: TimeValue { set: true, infinite: false, number: 1 },
-            tasks: TimeValue { set: true, infinite: false, number: 8 },
+            cpus_per_task: TimeValue::Value(1),
+            tasks: TimeValue::Value(8),
             start_time: TimeValue::default(),
             end_time: TimeValue::default(),
             time_limit: TimeValue::default(),
@@ -2168,10 +2718,10 @@ mod tests {
 
         // Set start time to 1 hour ago
         let now = chrono::Utc::now().timestamp() as u64;
-        job.start_time = TimeValue { set: true, infinite: false, number: now - 3600 };
+        job.start_time = TimeValue::Value(now - 3600);
 
         // Set time limit to 2 hours (120 minutes)
-        job.time_limit = TimeValue { set: true, infinite: false, number: 120 };
+        job.time_limit = TimeValue::Value(120);
 
         let remaining = job.remaining_time_minutes();
         assert!(remaining.is_some());
@@ -2182,15 +2732,69 @@ mod tests {
 
     #[test]
     fn test_time_value_timestamp() {
-        let tv = TimeValue { set: true, infinite: false, number: 1704067200 };
+        let tv = TimeValue::Value(1704067200);
         let ts = tv.to_timestamp();
         assert!(ts.is_some());
 
-        let tv_infinite = TimeValue { set: true, infinite: true, number: 0 };
+        let tv_infinite = TimeValue::Infinite;
         assert!(tv_infinite.to_timestamp().is_none());
 
-        let tv_unset = TimeValue { set: false, infinite: false, number: 0 };
+        let tv_unset = TimeValue::NotSet;
         assert!(tv_unset.to_timestamp().is_none());
+    }
+
+    #[test]
+    fn test_time_value_enum_methods() {
+        // Test Value variant
+        let val = TimeValue::Value(42);
+        assert!(val.is_set());
+        assert!(!val.is_infinite());
+        assert_eq!(val.value(), Some(42));
+        assert_eq!(val.number(), 42);
+
+        // Test Infinite variant
+        let inf = TimeValue::Infinite;
+        assert!(inf.is_set());
+        assert!(inf.is_infinite());
+        assert_eq!(inf.value(), None);
+        assert_eq!(inf.number(), 0);
+
+        // Test NotSet variant
+        let unset = TimeValue::NotSet;
+        assert!(!unset.is_set());
+        assert!(!unset.is_infinite());
+        assert_eq!(unset.value(), None);
+        assert_eq!(unset.number(), 0);
+
+        // Test Default
+        assert_eq!(TimeValue::default(), TimeValue::NotSet);
+    }
+
+    #[test]
+    fn test_time_value_serde_roundtrip() {
+        // Test Value variant
+        let val = TimeValue::Value(12345);
+        let json = serde_json::to_string(&val).unwrap();
+        assert!(json.contains("\"set\":true"));
+        assert!(json.contains("\"infinite\":false"));
+        assert!(json.contains("\"number\":12345"));
+        let parsed: TimeValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, val);
+
+        // Test Infinite variant
+        let inf = TimeValue::Infinite;
+        let json = serde_json::to_string(&inf).unwrap();
+        assert!(json.contains("\"set\":true"));
+        assert!(json.contains("\"infinite\":true"));
+        let parsed: TimeValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, inf);
+
+        // Test NotSet variant
+        let unset = TimeValue::NotSet;
+        let json = serde_json::to_string(&unset).unwrap();
+        assert!(json.contains("\"set\":false"));
+        let parsed: TimeValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, unset);
     }
 
     #[test]
@@ -2420,5 +3024,179 @@ mod tests {
         let reason: ReasonInfo = serde_json::from_str(json_object).unwrap();
         assert!(matches!(reason, ReasonInfo::Object { .. }));
         assert_eq!(reason.description(), "Node down for maintenance");
+    }
+
+    // Tests for RefreshConfig validation
+    #[test]
+    fn test_refresh_config_validate_valid_values() {
+        let mut config = RefreshConfig {
+            jobs_interval: 5,
+            nodes_interval: 10,
+            fairshare_interval: 60,
+            idle_slowdown: true,
+            idle_threshold: 30,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty(), "No warnings expected for valid config");
+    }
+
+    #[test]
+    fn test_refresh_config_validate_minimum_values() {
+        // Minimum valid values (1 second each)
+        let mut config = RefreshConfig {
+            jobs_interval: 1,
+            nodes_interval: 1,
+            fairshare_interval: 1,
+            idle_slowdown: true,
+            idle_threshold: 1,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty(), "No warnings expected for minimum valid values");
+    }
+
+    #[test]
+    fn test_refresh_config_validate_zero_jobs_interval() {
+        let mut config = RefreshConfig {
+            jobs_interval: 0,
+            nodes_interval: 10,
+            fairshare_interval: 60,
+            idle_slowdown: true,
+            idle_threshold: 30,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        let warnings = result.unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("jobs_interval"));
+        assert!(warnings[0].contains("at least 1"));
+        // Value should be corrected to default
+        assert_eq!(config.jobs_interval, RefreshConfig::default().jobs_interval);
+    }
+
+    #[test]
+    fn test_refresh_config_validate_zero_nodes_interval() {
+        let mut config = RefreshConfig {
+            jobs_interval: 5,
+            nodes_interval: 0,
+            fairshare_interval: 60,
+            idle_slowdown: true,
+            idle_threshold: 30,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        let warnings = result.unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("nodes_interval"));
+        // Value should be corrected to default
+        assert_eq!(config.nodes_interval, RefreshConfig::default().nodes_interval);
+    }
+
+    #[test]
+    fn test_refresh_config_validate_zero_fairshare_interval() {
+        let mut config = RefreshConfig {
+            jobs_interval: 5,
+            nodes_interval: 10,
+            fairshare_interval: 0,
+            idle_slowdown: true,
+            idle_threshold: 30,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        let warnings = result.unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("fairshare_interval"));
+        // Value should be corrected to default
+        assert_eq!(
+            config.fairshare_interval,
+            RefreshConfig::default().fairshare_interval
+        );
+    }
+
+    #[test]
+    fn test_refresh_config_validate_zero_idle_threshold_with_slowdown_enabled() {
+        let mut config = RefreshConfig {
+            jobs_interval: 5,
+            nodes_interval: 10,
+            fairshare_interval: 60,
+            idle_slowdown: true,
+            idle_threshold: 0,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        let warnings = result.unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("idle_threshold"));
+        // Value should be corrected to default
+        assert_eq!(
+            config.idle_threshold,
+            RefreshConfig::default().idle_threshold
+        );
+    }
+
+    #[test]
+    fn test_refresh_config_validate_zero_idle_threshold_with_slowdown_disabled() {
+        // If idle_slowdown is disabled, idle_threshold doesn't matter
+        let mut config = RefreshConfig {
+            jobs_interval: 5,
+            nodes_interval: 10,
+            fairshare_interval: 60,
+            idle_slowdown: false,
+            idle_threshold: 0,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_empty(),
+            "No warnings when idle_slowdown is disabled"
+        );
+    }
+
+    #[test]
+    fn test_refresh_config_validate_multiple_zero_values() {
+        let mut config = RefreshConfig {
+            jobs_interval: 0,
+            nodes_interval: 0,
+            fairshare_interval: 0,
+            idle_slowdown: true,
+            idle_threshold: 0,
+        };
+
+        let result = config.validate(false);
+        assert!(result.is_ok());
+        let warnings = result.unwrap();
+        // Should have 4 warnings: jobs, nodes, fairshare, idle_threshold
+        assert_eq!(warnings.len(), 4);
+        // All values should be corrected to defaults
+        let defaults = RefreshConfig::default();
+        assert_eq!(config.jobs_interval, defaults.jobs_interval);
+        assert_eq!(config.nodes_interval, defaults.nodes_interval);
+        assert_eq!(config.fairshare_interval, defaults.fairshare_interval);
+        assert_eq!(config.idle_threshold, defaults.idle_threshold);
+    }
+
+    #[test]
+    fn test_refresh_config_validate_strict_mode_error() {
+        let mut config = RefreshConfig {
+            jobs_interval: 0,
+            nodes_interval: 10,
+            fairshare_interval: 60,
+            idle_slowdown: true,
+            idle_threshold: 30,
+        };
+
+        let result = config.validate(true);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("jobs_interval"));
+        assert!(err.contains("at least 1"));
     }
 }

@@ -4,30 +4,51 @@
 //! The architecture follows a TEA-inspired pattern with mutable state and method-based updates.
 
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use crate::models::{JobInfo, NodeInfo, SshareEntry, FairshareNode, FlatFairshareRow, SchedulerStats, TuiConfig};
-use crate::tui::event::{DataEvent, DataSource, EventResult, InputEvent, KeyAction};
+use tokio::sync::mpsc;
+
+use crate::models::{
+    FairshareNode, FlatFairshareRow, JobInfo, NodeInfo, SchedulerStats, SshareEntry, TuiConfig,
+};
+use crate::tui::event::{DataEvent, EventResult, InputEvent, KeyAction};
 
 /// Confirmation action types
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
-    CancelJob { job_id: u64, job_name: String },
-    CancelJobArray { base_job_id: u64, job_name: String, task_count: u32 },
+    CancelJob {
+        job_id: u64,
+        job_name: String,
+    },
+    CancelJobArray {
+        base_job_id: u64,
+        job_name: String,
+        task_count: u32,
+    },
 }
 
 impl ConfirmAction {
+    #[must_use]
     pub fn description(&self) -> String {
         match self {
             ConfirmAction::CancelJob { job_id, job_name } => {
                 format!("Cancel job {} ({})?", job_id, job_name)
             }
-            ConfirmAction::CancelJobArray { base_job_id, job_name, task_count } => {
-                format!("Cancel job array {} ({}) with {} tasks?", base_job_id, job_name, task_count)
+            ConfirmAction::CancelJobArray {
+                base_job_id,
+                job_name,
+                task_count,
+            } => {
+                format!(
+                    "Cancel job array {} ({}) with {} tasks?",
+                    base_job_id, job_name, task_count
+                )
             }
         }
     }
 
+    #[must_use]
     pub fn job_id(&self) -> u64 {
         match self {
             ConfirmAction::CancelJob { job_id, .. } => *job_id,
@@ -72,6 +93,7 @@ impl SortMenuState {
         }
     }
 
+    #[must_use]
     pub fn selected_column(&self) -> Option<JobSortColumn> {
         self.columns.get(self.selected).map(|(_, col)| *col)
     }
@@ -81,8 +103,8 @@ impl SortMenuState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterType {
     #[default]
-    QuickSearch,  // `/` - filters by name only
-    Advanced,     // `f` - full filter dialog with field selection
+    QuickSearch, // `/` - filters by name only
+    Advanced, // `f` - full filter dialog with field selection
 }
 
 /// Export format options
@@ -102,42 +124,48 @@ pub struct ClipboardFeedback {
 
 impl ClipboardFeedback {
     pub fn success(message: String) -> Self {
-        Self { message, success: true, timestamp: Instant::now() }
+        Self {
+            message,
+            success: true,
+            timestamp: Instant::now(),
+        }
     }
 
     pub fn failure(message: String) -> Self {
-        Self { message, success: false, timestamp: Instant::now() }
+        Self {
+            message,
+            success: false,
+            timestamp: Instant::now(),
+        }
     }
 
+    #[must_use]
     pub fn is_visible(&self) -> bool {
         self.timestamp.elapsed() < Duration::from_secs(2)
     }
 }
-
-// Re-export for use by other modules
-pub use crate::models::NodeInfo as TuiNodeInfo;
 
 /// Time value with explicit unknown handling (0 = unknown in Slurm)
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SlurmTime(i64);
 
 impl SlurmTime {
+    #[must_use]
     pub fn from_epoch(epoch: i64) -> Self {
         Self(epoch)
     }
 
+    #[must_use]
     pub fn is_known(&self) -> bool {
         self.0 > 0 // Slurm uses 0 for "not set"
     }
 
+    #[must_use]
     pub fn as_epoch(&self) -> Option<i64> {
-        if self.is_known() {
-            Some(self.0)
-        } else {
-            None
-        }
+        if self.is_known() { Some(self.0) } else { None }
     }
 
+    #[must_use]
     pub fn as_datetime(&self) -> Option<chrono::DateTime<chrono::Local>> {
         use chrono::TimeZone;
         self.as_epoch()
@@ -164,12 +192,9 @@ pub enum JobState {
 }
 
 impl JobState {
+    #[allow(dead_code)]
     pub fn from_slurm_state(states: &[String]) -> Self {
-        match states
-            .first()
-            .map(|s| s.split_whitespace().next())
-            .flatten()
-        {
+        match states.first().and_then(|s| s.split_whitespace().next()) {
             Some("PENDING") => Self::Pending,
             Some("RUNNING") => Self::Running,
             Some("COMPLETING") => Self::Completing,
@@ -202,6 +227,7 @@ impl JobState {
         }
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "PENDING",
@@ -219,6 +245,7 @@ impl JobState {
         }
     }
 
+    #[must_use]
     pub fn short_str(&self) -> &'static str {
         match self {
             Self::Pending => "PD",
@@ -238,17 +265,20 @@ impl JobState {
 }
 
 /// Job ID supporting both regular jobs and array jobs
+///
+/// Uses `NonZeroU64` for `base_id` because a zero job ID is never valid in Slurm,
+/// making this invariant structural and enabling niche optimization for `Option<JobId>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobId {
-    pub base_id: u64,
+    pub base_id: NonZeroU64,
     pub array_task_id: Option<u32>,
 }
 
 impl std::fmt::Display for JobId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.array_task_id {
-            Some(task) => write!(f, "{}_{}", self.base_id, task),
-            None => write!(f, "{}", self.base_id),
+            Some(task) => write!(f, "{}_{}", self.base_id.get(), task),
+            None => write!(f, "{}", self.base_id.get()),
         }
     }
 }
@@ -264,6 +294,7 @@ pub struct TuiJobInfo {
 
     // State information
     pub state: JobState,
+    #[allow(dead_code)]
     pub state_raw: String,
     pub state_reason: String,
 
@@ -286,11 +317,14 @@ pub struct TuiJobInfo {
     // Job shape
     pub ntasks: u32,
     pub cpus_per_task: u32,
+    #[allow(dead_code)]
     pub ntasks_per_node: Option<u32>,
     pub constraint: String,
 
     // TRES resources
+    #[allow(dead_code)]
     pub tres_requested: HashMap<String, f64>,
+    #[allow(dead_code)]
     pub tres_allocated: HashMap<String, f64>,
 
     // Computed GPU info
@@ -323,12 +357,12 @@ impl TuiJobInfo {
         let gpu_info = job.gpu_type_info();
 
         // Calculate elapsed time from start_time if running
-        let elapsed_seconds = if job.start_time.set && !job.start_time.infinite {
+        let elapsed_seconds = if let Some(start) = job.start_time.value() {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            now.saturating_sub(job.start_time.number) as u32
+            now.saturating_sub(start) as u32
         } else {
             0
         };
@@ -338,7 +372,8 @@ impl TuiJobInfo {
 
         Self {
             job_id: JobId {
-                base_id: job.job_id,
+                base_id: NonZeroU64::new(job.job_id)
+                    .expect("Slurm job IDs should never be zero"),
                 array_task_id,
             },
             name: job.name.clone(),
@@ -350,21 +385,33 @@ impl TuiJobInfo {
             state_raw: state_str.to_string(),
             state_reason: job.state_reason.clone(),
 
-            priority: if job.priority.set { job.priority.number as u32 } else { 0 },
+            priority: job.priority.number() as u32,
             qos: job.qos.clone(),
 
-            submit_time: if job.submit_time.set { SlurmTime::from_epoch(job.submit_time.number as i64) } else { SlurmTime::default() },
-            start_time: if job.start_time.set { SlurmTime::from_epoch(job.start_time.number as i64) } else { SlurmTime::default() },
-            end_time: if job.end_time.set { SlurmTime::from_epoch(job.end_time.number as i64) } else { SlurmTime::default() },
-            time_limit_seconds: if job.time_limit.set && !job.time_limit.infinite { (job.time_limit.number * 60) as u32 } else { 0 },
+            submit_time: job
+                .submit_time
+                .value()
+                .map(|n| SlurmTime::from_epoch(n as i64))
+                .unwrap_or_default(),
+            start_time: job
+                .start_time
+                .value()
+                .map(|n| SlurmTime::from_epoch(n as i64))
+                .unwrap_or_default(),
+            end_time: job
+                .end_time
+                .value()
+                .map(|n| SlurmTime::from_epoch(n as i64))
+                .unwrap_or_default(),
+            time_limit_seconds: job.time_limit.value().map(|n| (n * 60) as u32).unwrap_or(0),
             elapsed_seconds,
 
             nodes: job.nodes.clone(),
             node_count: 1, // Simplified - could parse from nodes string
-            cpus: job.cpus_per_task.number as u32 * job.tasks.number.max(1) as u32,
+            cpus: job.cpus_per_task.number() as u32 * job.tasks.number().max(1) as u32,
 
-            ntasks: if job.tasks.set { job.tasks.number as u32 } else { 1 },
-            cpus_per_task: if job.cpus_per_task.set { job.cpus_per_task.number as u32 } else { 1 },
+            ntasks: job.tasks.value().map(|n| n as u32).unwrap_or(1),
+            cpus_per_task: job.cpus_per_task.value().map(|n| n as u32).unwrap_or(1),
             ntasks_per_node: None,
             constraint: String::new(),
 
@@ -372,7 +419,11 @@ impl TuiJobInfo {
             tres_allocated: HashMap::new(),
 
             gpu_count: gpu_info.count,
-            gpu_type: if gpu_info.gpu_type.is_empty() { None } else { Some(gpu_info.gpu_type) },
+            gpu_type: if gpu_info.gpu_type.is_empty() {
+                None
+            } else {
+                Some(gpu_info.gpu_type)
+            },
             memory_gb: 0.0, // Not directly available
 
             working_directory: job.current_working_directory.clone(),
@@ -380,7 +431,7 @@ impl TuiJobInfo {
             stderr_path: String::new(),
 
             dependency: String::new(),
-            array_job_id: if job.array_job_id.set { Some(job.array_job_id.number) } else { None },
+            array_job_id: job.array_job_id.value(),
             array_task_count: None,
             array_tasks_pending: None,
             array_tasks_running: None,
@@ -388,10 +439,12 @@ impl TuiJobInfo {
         }
     }
 
+    #[must_use]
     pub fn is_array_job(&self) -> bool {
         self.job_id.array_task_id.is_some() || self.array_job_id.is_some()
     }
 
+    #[must_use]
     pub fn time_remaining(&self) -> Option<Duration> {
         if self.state == JobState::Running && self.time_limit_seconds > 0 {
             let remaining = self.time_limit_seconds.saturating_sub(self.elapsed_seconds);
@@ -401,10 +454,12 @@ impl TuiJobInfo {
         }
     }
 
+    #[must_use]
     pub fn elapsed_display(&self) -> String {
         format_duration(self.elapsed_seconds as u64)
     }
 
+    #[must_use]
     pub fn time_limit_display(&self) -> String {
         if self.time_limit_seconds == 0 {
             "-".to_string()
@@ -414,6 +469,7 @@ impl TuiJobInfo {
     }
 
     /// Get estimated start time display for pending jobs
+    #[must_use]
     pub fn estimated_start_display(&self) -> String {
         if self.state != JobState::Pending {
             return "-".to_string();
@@ -477,6 +533,7 @@ pub struct PartitionStatus {
 }
 
 impl PartitionStatus {
+    #[must_use]
     pub fn cpu_utilization(&self) -> f64 {
         if self.total_cpus == 0 {
             0.0
@@ -485,6 +542,7 @@ impl PartitionStatus {
         }
     }
 
+    #[must_use]
     pub fn memory_utilization(&self) -> f64 {
         if self.total_memory_gb < 0.01 {
             0.0
@@ -493,6 +551,7 @@ impl PartitionStatus {
         }
     }
 
+    #[must_use]
     pub fn gpu_utilization(&self) -> f64 {
         if self.total_gpus == 0 {
             0.0
@@ -503,9 +562,13 @@ impl PartitionStatus {
 }
 
 /// Data slice with staleness tracking
+///
+/// Encapsulates data with timestamp tracking. The `data` field is private to ensure
+/// all updates go through `update()`, which properly sets `last_updated`.
+/// Use `iter()` and `get()` for read access.
 #[derive(Debug)]
 pub struct DataSlice<T> {
-    pub data: Vec<T>,
+    data: Vec<T>,
     pub last_updated: Option<Instant>,
     pub stale_threshold: Duration,
 }
@@ -529,12 +592,14 @@ impl<T> DataSlice<T> {
         }
     }
 
+    #[must_use]
     pub fn is_stale(&self) -> bool {
         self.last_updated
             .map(|t| t.elapsed() > self.stale_threshold)
             .unwrap_or(true)
     }
 
+    #[must_use]
     pub fn age(&self) -> Option<Duration> {
         self.last_updated.map(|t| t.elapsed())
     }
@@ -544,12 +609,33 @@ impl<T> DataSlice<T> {
         self.last_updated = Some(Instant::now());
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
+    }
+
+    /// Returns an iterator over the data
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.data.iter()
+    }
+
+    /// Returns a reference to the element at the given index, if it exists
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.data.get(index)
+    }
+
+    /// Returns the data as a slice for efficient read-only access
+    ///
+    /// Use this when you need indexed access to multiple elements.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        &self.data
     }
 }
 
@@ -570,7 +656,8 @@ impl ListState {
             self.selected = self.selected.min(list_len - 1);
             if self.selected < self.scroll_offset {
                 self.scroll_offset = self.selected;
-            } else if self.visible_count > 0 && self.selected >= self.scroll_offset + self.visible_count
+            } else if self.visible_count > 0
+                && self.selected >= self.scroll_offset + self.visible_count
             {
                 self.scroll_offset = self.selected.saturating_sub(self.visible_count - 1);
             }
@@ -651,6 +738,7 @@ impl JobsViewState {
     }
 
     /// Toggle collapse state for an array job
+    #[allow(dead_code)]
     pub fn toggle_array_collapse(&mut self, base_job_id: u64) {
         if self.collapsed_arrays.contains(&base_job_id) {
             self.collapsed_arrays.remove(&base_job_id);
@@ -661,10 +749,13 @@ impl JobsViewState {
     }
 
     /// Check if an array job is collapsed
+    #[must_use]
     pub fn is_array_collapsed(&self, base_job_id: u64) -> bool {
         self.collapsed_arrays.contains(&base_job_id)
     }
 
+    #[allow(dead_code)]
+    #[must_use]
     pub fn get_filtered_indices(
         &mut self,
         jobs: &[TuiJobInfo],
@@ -694,6 +785,7 @@ impl JobsViewState {
     ///   - name:test, user:john, account:bio, partition:gpu, state:running, qos:normal
     ///   - Multiple filters can be combined with spaces: `user:john state:running`
     ///   - Negation with !: `!partition:gpu` excludes GPU partition
+    #[must_use]
     pub fn get_sorted_indices(&self, jobs: &[TuiJobInfo], filter: &Option<String>) -> Vec<usize> {
         let mut indices: Vec<usize> = jobs
             .iter()
@@ -712,19 +804,21 @@ impl JobsViewState {
             let cmp = match sort_column {
                 JobSortColumn::JobId => job_a.job_id.base_id.cmp(&job_b.job_id.base_id),
                 JobSortColumn::Name => job_a.name.to_lowercase().cmp(&job_b.name.to_lowercase()),
-                JobSortColumn::Account => job_a.account.to_lowercase().cmp(&job_b.account.to_lowercase()),
-                JobSortColumn::Partition => job_a.partition.to_lowercase().cmp(&job_b.partition.to_lowercase()),
+                JobSortColumn::Account => job_a
+                    .account
+                    .to_lowercase()
+                    .cmp(&job_b.account.to_lowercase()),
+                JobSortColumn::Partition => job_a
+                    .partition
+                    .to_lowercase()
+                    .cmp(&job_b.partition.to_lowercase()),
                 JobSortColumn::State => (job_a.state as u8).cmp(&(job_b.state as u8)),
                 JobSortColumn::Time => job_a.elapsed_seconds.cmp(&job_b.elapsed_seconds),
                 JobSortColumn::Priority => job_a.priority.cmp(&job_b.priority),
                 JobSortColumn::Gpus => job_a.gpu_count.cmp(&job_b.gpu_count),
             };
 
-            if ascending {
-                cmp
-            } else {
-                cmp.reverse()
-            }
+            if ascending { cmp } else { cmp.reverse() }
         });
 
         indices
@@ -744,6 +838,7 @@ pub enum NodesViewMode {
 pub struct NodesViewState {
     pub list_state: ListState,
     pub view_mode: NodesViewMode,
+    #[allow(dead_code)]
     pub partition_filter: Option<String>,
 }
 
@@ -751,6 +846,7 @@ pub struct NodesViewState {
 #[derive(Debug, Default)]
 pub struct PartitionsViewState {
     pub list_state: ListState,
+    #[allow(dead_code)]
     pub show_account_breakdown: bool,
 }
 
@@ -787,18 +883,6 @@ pub enum ProblemsPanel {
     Draining,
 }
 
-/// Application mode
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum AppMode {
-    #[default]
-    Normal,
-    Filter,
-    Help,
-    Detail,
-    Sort,
-    Confirm,
-}
-
 /// Current view
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
@@ -811,6 +895,7 @@ pub enum View {
 }
 
 impl View {
+    #[must_use]
     pub fn next(&self) -> Self {
         match self {
             View::Jobs => View::Nodes,
@@ -821,6 +906,7 @@ impl View {
         }
     }
 
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             View::Jobs => "Jobs",
@@ -840,156 +926,327 @@ pub struct AccountContext {
 }
 
 impl AccountContext {
+    /// Cycle through accounts: None -> first -> second -> ... -> last -> None
     pub fn cycle_account(&mut self) {
-        match &self.focused_account {
-            None if !self.user_accounts.is_empty() => {
-                self.focused_account = Some(self.user_accounts[0].clone());
-            }
-            Some(current) => {
-                let idx = self.user_accounts.iter().position(|a| a == current);
-                match idx {
-                    Some(i) if i + 1 < self.user_accounts.len() => {
-                        self.focused_account = Some(self.user_accounts[i + 1].clone());
-                    }
-                    _ => {
-                        self.focused_account = None;
-                    }
-                }
-            }
-            None => {}
+        if self.user_accounts.is_empty() {
+            return;
+        }
+
+        let current_idx = self
+            .focused_account
+            .as_ref()
+            .and_then(|acc| self.user_accounts.iter().position(|a| a == acc));
+
+        self.focused_account = match current_idx {
+            None => self.user_accounts.first().cloned(),
+            Some(i) => self.user_accounts.get(i + 1).cloned(),
+        };
+    }
+
+    #[must_use]
+    pub fn display(&self) -> String {
+        self.focused_account
+            .clone()
+            .unwrap_or_else(|| "all".to_string())
+    }
+}
+
+// ============================================================================
+// Grouped State Types (Refactored Architecture)
+// ============================================================================
+
+/// Modal overlay state - only one modal can be active at a time.
+///
+/// This enum replaces the scattered modal-related fields (mode, show_help,
+/// confirm_action, sort_menu, filter editing state) with a unified type that
+/// makes impossible states unrepresentable.
+///
+/// NOTE: Filter's edit_buffer is EPHEMERAL - it's the draft being typed.
+/// The actual applied filter lives in DataCache.active_filter
+#[derive(Debug, Default)]
+pub enum ModalState {
+    #[default]
+    None,
+    Help,
+    /// Filter editing mode - edit_buffer is temporary draft
+    Filter {
+        edit_buffer: String,
+        cursor: usize,
+        filter_type: FilterType,
+    },
+    Detail,
+    Sort {
+        menu: SortMenuState,
+    },
+    Confirm {
+        action: ConfirmAction,
+    },
+}
+
+impl ModalState {
+    /// Check if any modal is currently active
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        !matches!(self, ModalState::None)
+    }
+
+    /// Check if the modal is blocking (requires explicit dismissal)
+    #[must_use]
+    pub fn is_blocking(&self) -> bool {
+        matches!(
+            self,
+            ModalState::Confirm { .. } | ModalState::Detail | ModalState::Sort { .. }
+        )
+    }
+
+    /// Check if currently in filter editing mode
+    #[must_use]
+    pub fn is_editing_filter(&self) -> bool {
+        matches!(self, ModalState::Filter { .. })
+    }
+
+    /// Get the confirm action if in confirm mode
+    #[must_use]
+    pub fn confirm_action(&self) -> Option<&ConfirmAction> {
+        match self {
+            ModalState::Confirm { action } => Some(action),
+            _ => None,
         }
     }
 
-    pub fn display(&self) -> String {
-        match &self.focused_account {
-            Some(acc) => acc.clone(),
-            None => "all".to_string(),
+    /// Get the sort menu if in sort mode
+    #[must_use]
+    pub fn sort_menu(&self) -> Option<&SortMenuState> {
+        match self {
+            ModalState::Sort { menu } => Some(menu),
+            _ => None,
+        }
+    }
+
+    /// Get mutable reference to sort menu
+    #[must_use]
+    pub fn sort_menu_mut(&mut self) -> Option<&mut SortMenuState> {
+        match self {
+            ModalState::Sort { menu } => Some(menu),
+            _ => None,
         }
     }
 }
 
-/// Filter state
-#[derive(Debug, Default)]
-pub struct FilterState {
-    pub input: String,
-    pub cursor_position: usize,
-    pub active: bool,
+/// Applied filter that persists when modal closes
+#[derive(Debug, Clone, Default)]
+pub struct ActiveFilter {
+    pub text: String,
     pub filter_type: FilterType,
 }
 
-impl FilterState {
-    pub fn clear(&mut self) {
-        self.input.clear();
-        self.cursor_position = 0;
+impl ActiveFilter {
+    /// Get filter text as Option for filtering logic
+    #[must_use]
+    pub fn as_option(&self) -> Option<String> {
+        if self.text.is_empty() {
+            None
+        } else {
+            Some(self.text.clone())
+        }
     }
+}
 
-    pub fn push(&mut self, c: char) {
-        self.input.insert(self.cursor_position, c);
-        self.cursor_position += 1;
-    }
+/// Grouped data cache with staleness tracking
+#[derive(Debug)]
+pub struct DataCache {
+    pub jobs: DataSlice<TuiJobInfo>,
+    pub nodes: DataSlice<NodeInfo>,
+    pub partitions: DataSlice<PartitionStatus>,
+    pub fairshare: DataSlice<SshareEntry>,
+    pub fairshare_tree: Vec<FlatFairshareRow>,
+    pub scheduler_stats: Option<SchedulerStats>,
 
-    pub fn backspace(&mut self) {
-        if self.cursor_position > 0 {
-            self.cursor_position -= 1;
-            self.input.remove(self.cursor_position);
+    /// Persistent filter state (survives modal close)
+    pub active_filter: Option<ActiveFilter>,
+}
+
+impl DataCache {
+    /// Create a new DataCache with configured stale thresholds
+    pub fn new(config: &TuiConfig) -> Self {
+        Self {
+            jobs: DataSlice::new(Duration::from_secs(config.refresh.jobs_interval * 3)),
+            nodes: DataSlice::new(Duration::from_secs(config.refresh.nodes_interval * 3)),
+            partitions: DataSlice::new(Duration::from_secs(config.refresh.nodes_interval * 3)),
+            fairshare: DataSlice::new(Duration::from_secs(config.refresh.fairshare_interval * 3)),
+            fairshare_tree: Vec::new(),
+            scheduler_stats: None,
+            active_filter: None,
         }
     }
 
+    /// Get the active filter text as Option for filtering logic
+    #[must_use]
     pub fn get_filter(&self) -> Option<String> {
-        if self.input.is_empty() {
-            None
+        self.active_filter.as_ref().and_then(|f| f.as_option())
+    }
+
+    /// Set the active filter
+    pub fn set_filter(&mut self, text: String, filter_type: FilterType) {
+        if text.is_empty() {
+            self.active_filter = None;
         } else {
-            Some(self.input.clone())
+            self.active_filter = Some(ActiveFilter { text, filter_type });
+        }
+    }
+
+    /// Clear the active filter
+    pub fn clear_filter(&mut self) {
+        self.active_filter = None;
+    }
+}
+
+/// Unified feedback state for errors, warnings, and transient messages
+#[derive(Debug)]
+pub struct FeedbackState {
+    last_error: Option<(String, Instant)>,
+    error_display_duration: Duration,
+    pub config_warnings: Vec<String>,
+    clipboard_feedback: Option<ClipboardFeedback>,
+}
+
+impl FeedbackState {
+    /// Create a new FeedbackState with config warnings
+    pub fn new(config_warnings: Vec<String>) -> Self {
+        Self {
+            last_error: None,
+            error_display_duration: Duration::from_secs(5),
+            config_warnings,
+            clipboard_feedback: None,
+        }
+    }
+
+    /// Set an error message to display
+    pub fn set_error(&mut self, msg: String) {
+        self.last_error = Some((msg, Instant::now()));
+    }
+
+    /// Check if error should still be displayed
+    #[must_use]
+    pub fn should_show_error(&self) -> bool {
+        self.last_error
+            .as_ref()
+            .map(|(_, t)| t.elapsed() < self.error_display_duration)
+            .unwrap_or(false)
+    }
+
+    /// Get the current error message if it should be shown
+    #[must_use]
+    pub fn current_error(&self) -> Option<&str> {
+        if self.should_show_error() {
+            self.last_error.as_ref().map(|(msg, _)| msg.as_str())
+        } else {
+            None
+        }
+    }
+
+    /// Set clipboard operation feedback
+    pub fn set_clipboard_feedback(&mut self, feedback: ClipboardFeedback) {
+        self.clipboard_feedback = Some(feedback);
+    }
+
+    /// Get current clipboard feedback if visible
+    #[must_use]
+    pub fn current_clipboard_feedback(&self) -> Option<&ClipboardFeedback> {
+        self.clipboard_feedback.as_ref().filter(|f| f.is_visible())
+    }
+
+    /// Clear clipboard feedback
+    pub fn clear_clipboard_feedback(&mut self) {
+        self.clipboard_feedback = None;
+    }
+}
+
+/// Grouped timing state for activity tracking
+#[derive(Debug)]
+pub struct TimingState {
+    pub last_input: Instant,
+    pub last_refresh: Option<Instant>,
+}
+
+impl Default for TimingState {
+    fn default() -> Self {
+        Self {
+            last_input: Instant::now(),
+            last_refresh: None,
         }
     }
 }
 
 /// Main application state
+///
+/// This struct has been refactored to group related fields:
+/// - `modal`: Unified modal state (replaces mode, show_help, confirm_action, sort_menu, filter editing)
+/// - `data`: Grouped data cache (replaces jobs, nodes, partitions, fairshare, etc.)
+/// - `feedback`: Unified feedback state (replaces last_error, clipboard_feedback, config_warnings)
+/// - `timing`: Grouped timing state (replaces last_input, last_refresh)
 pub struct App {
     // Lifecycle
     pub running: bool,
 
-    // Mode and View
-    pub mode: AppMode,
+    // View State
     pub current_view: View,
     pub previous_view: View,
 
-    // Data
-    pub jobs: DataSlice<TuiJobInfo>,
-    pub nodes: DataSlice<NodeInfo>,
-    pub partitions: DataSlice<PartitionStatus>,
+    // Modal State (UNIFIED - replaces mode, show_help, confirm_action, sort_menu, filter editing)
+    pub modal: ModalState,
 
-    // Fairshare data (Phase 4)
-    pub fairshare: DataSlice<SshareEntry>,
-    pub fairshare_tree: Vec<FlatFairshareRow>,
-    pub scheduler_stats: Option<SchedulerStats>,
+    // Data (GROUPED - replaces jobs, nodes, partitions, fairshare, etc.)
+    pub data: DataCache,
 
-    // User context
+    // User Context
     pub username: String,
     pub show_all_jobs: bool,
-
-    // Account context
     pub account_context: AccountContext,
 
-    // Per-view state
+    // Per-View States (unchanged - already well-designed)
     pub jobs_view: JobsViewState,
     pub nodes_view: NodesViewState,
     pub partitions_view: PartitionsViewState,
     pub personal_view: PersonalViewState,
     pub problems_view: ProblemsViewState,
 
-    // Filter
-    pub filter: FilterState,
+    // Feedback (GROUPED - replaces last_error, clipboard_feedback, config_warnings)
+    pub feedback: FeedbackState,
 
-    // UI state
-    pub show_help: bool,
+    // Timing (GROUPED - replaces last_input, last_refresh)
+    pub timing: TimingState,
 
-    // Dialogs and overlays (Phase 3)
-    pub confirm_action: Option<ConfirmAction>,
-    pub sort_menu: SortMenuState,
-    pub clipboard_feedback: Option<ClipboardFeedback>,
-
-    // Error display
-    pub last_error: Option<(String, Instant)>,
-    pub error_display_duration: Duration,
-
-    // Timing
-    pub last_input: Instant,
-    pub last_refresh: Option<Instant>,
-
-    // Configuration (Phase 4)
+    // Configuration
     pub config: TuiConfig,
-}
+    pub slurm_bin_path: std::path::PathBuf,
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
+    // Communication
+    pub data_tx: mpsc::Sender<DataEvent>,
 }
 
 impl App {
-    pub fn new() -> Self {
+    /// Create a new App instance with the required data channel sender.
+    ///
+    /// The `data_tx` channel is required for async operations like job cancellation.
+    /// This ensures the type system prevents runtime errors from missing channels.
+    pub fn new(data_tx: mpsc::Sender<DataEvent>) -> Self {
         let username = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-        let config = TuiConfig::load();
+        let (config, config_warnings) = TuiConfig::load();
 
         Self {
             running: true,
-            mode: AppMode::Normal,
             current_view: View::Jobs,
             previous_view: View::Jobs,
 
-            jobs: DataSlice::new(Duration::from_secs(config.refresh.jobs_interval * 3)),
-            nodes: DataSlice::new(Duration::from_secs(config.refresh.nodes_interval * 3)),
-            partitions: DataSlice::new(Duration::from_secs(config.refresh.nodes_interval * 3)),
+            // Unified modal state
+            modal: ModalState::None,
 
-            // Phase 4: fairshare and scheduler stats
-            fairshare: DataSlice::new(Duration::from_secs(config.refresh.fairshare_interval * 3)),
-            fairshare_tree: Vec::new(),
-            scheduler_stats: None,
+            // Grouped data cache
+            data: DataCache::new(&config),
 
             username,
             show_all_jobs: config.display.show_all_jobs,
-
             account_context: AccountContext::default(),
 
             jobs_view: JobsViewState {
@@ -1001,32 +1258,34 @@ impl App {
             personal_view: PersonalViewState::default(),
             problems_view: ProblemsViewState::default(),
 
-            filter: FilterState::default(),
+            // Grouped feedback state
+            feedback: FeedbackState::new(config_warnings),
 
-            show_help: false,
-
-            // Phase 3: dialogs and overlays
-            confirm_action: None,
-            sort_menu: SortMenuState::new(),
-            clipboard_feedback: None,
-
-            last_error: None,
-            error_display_duration: Duration::from_secs(5),
-
-            last_input: Instant::now(),
-            last_refresh: None,
+            // Grouped timing state
+            timing: TimingState::default(),
 
             config,
+
+            // Default empty - should be set via with_slurm_path()
+            slurm_bin_path: std::path::PathBuf::new(),
+
+            data_tx,
         }
+    }
+
+    /// Create App with a specific Slurm binary path
+    pub fn with_slurm_path(mut self, path: std::path::PathBuf) -> Self {
+        self.slurm_bin_path = path;
+        self
     }
 
     /// Handle an input event
     pub fn handle_input(&mut self, event: InputEvent) -> EventResult {
-        self.last_input = Instant::now();
+        self.timing.last_input = Instant::now();
 
         match event {
             InputEvent::Key(key_event) => {
-                let in_filter = self.mode == AppMode::Filter;
+                let in_filter = self.modal.is_editing_filter();
                 let action = KeyAction::from_key_event(key_event, in_filter);
                 self.handle_action(action)
             }
@@ -1041,10 +1300,10 @@ impl App {
     /// Handle a key action
     fn handle_action(&mut self, action: KeyAction) -> EventResult {
         // Help overlay takes priority
-        if self.show_help {
+        if matches!(self.modal, ModalState::Help) {
             match action {
                 KeyAction::Escape | KeyAction::ShowHelp | KeyAction::Quit => {
-                    self.show_help = false;
+                    self.modal = ModalState::None;
                     return EventResult::Continue;
                 }
                 _ => return EventResult::Unchanged,
@@ -1052,12 +1311,22 @@ impl App {
         }
 
         // Modal modes take priority over normal navigation
-        match &self.mode {
-            AppMode::Filter => return self.handle_filter_action(action),
-            AppMode::Confirm => return self.handle_confirm_action(action),
-            AppMode::Sort => return self.handle_sort_action(action),
-            AppMode::Detail => return self.handle_detail_action(action),
+        match &self.modal {
+            ModalState::Filter { .. } => return self.handle_filter_action(action),
+            ModalState::Confirm { .. } => return self.handle_confirm_action(action),
+            ModalState::Sort { .. } => return self.handle_sort_action(action),
+            ModalState::Detail => return self.handle_detail_action(action),
             _ => {}
+        }
+
+        // Handle navigation actions first (common pattern: call method, return Continue)
+        if let Some(result) = self.handle_navigation(&action) {
+            return result;
+        }
+
+        // Handle view switching actions
+        if let Some(result) = self.handle_view_switch(&action) {
+            return result;
         }
 
         match action {
@@ -1066,99 +1335,42 @@ impl App {
                 EventResult::Quit
             }
 
-            // Navigation
-            KeyAction::MoveUp => {
-                self.navigate_up();
-                EventResult::Continue
-            }
-            KeyAction::MoveDown => {
-                self.navigate_down();
-                EventResult::Continue
-            }
-            KeyAction::MoveToTop => {
-                self.navigate_to_top();
-                EventResult::Continue
-            }
-            KeyAction::MoveToBottom => {
-                self.navigate_to_bottom();
-                EventResult::Continue
-            }
-            KeyAction::PageUp => {
-                self.page_up();
-                EventResult::Continue
-            }
-            KeyAction::PageDown => {
-                self.page_down();
-                EventResult::Continue
-            }
-
-            // View switching
-            KeyAction::SwitchToJobs => {
-                self.switch_view(View::Jobs);
-                EventResult::Continue
-            }
-            KeyAction::SwitchToNodes => {
-                self.switch_view(View::Nodes);
-                EventResult::Continue
-            }
-            KeyAction::SwitchToPartitions => {
-                self.switch_view(View::Partitions);
-                EventResult::Continue
-            }
-            KeyAction::SwitchToPersonal => {
-                self.switch_view(View::Personal);
-                EventResult::Continue
-            }
-            KeyAction::SwitchToProblems => {
-                self.switch_view(View::Problems);
-                EventResult::Continue
-            }
-            KeyAction::NextView => {
-                // In views with panels (Personal, Problems), Tab cycles panels
-                // In other views, Tab switches to the next view
-                if self.view_has_panels() {
-                    self.cycle_panel();
-                } else {
-                    self.switch_view(self.current_view.next());
-                }
-                EventResult::Continue
-            }
-
             // Actions
             KeyAction::Select => {
                 // Open detail view for selected item, or toggle array collapse
                 if self.current_view == View::Jobs {
                     if self.selected_job().is_some() {
                         // Always show job detail view
-                        self.mode = AppMode::Detail;
+                        self.modal = ModalState::Detail;
                     }
                 } else if self.current_view == View::Personal {
                     // Allow job detail view from Personal view
-                    if self.personal_running_job().is_some() || self.personal_pending_job().is_some() {
-                        self.mode = AppMode::Detail;
+                    if self.personal_running_job().is_some()
+                        || self.personal_pending_job().is_some()
+                    {
+                        self.modal = ModalState::Detail;
                     }
                 }
                 EventResult::Continue
             }
             KeyAction::Cancel => {
                 // Initiate job cancel confirmation
-                if self.current_view == View::Jobs {
-                    if let Some(job) = self.selected_job() {
-                        let action = if job.is_array_job() {
-                            ConfirmAction::CancelJobArray {
-                                base_job_id: job.job_id.base_id,
-                                job_name: job.name.clone(),
-                                task_count: job.array_task_count.unwrap_or(1),
-                            }
-                        } else {
-                            ConfirmAction::CancelJob {
-                                job_id: job.job_id.base_id,
-                                job_name: job.name.clone(),
-                            }
-                        };
-                        self.confirm_action = Some(action);
-                        self.mode = AppMode::Confirm;
-                    }
+                if self.current_view == View::Jobs
+                    && let Some(job) = self.selected_job()
+                {
+                    let confirm_action = if job.is_array_job() {
+                        ConfirmAction::CancelJobArray {
+                            base_job_id: job.job_id.base_id.get(),
+                            job_name: job.name.clone(),
+                            task_count: job.array_task_count.unwrap_or(1),
+                        }
+                    } else {
+                        ConfirmAction::CancelJob {
+                            job_id: job.job_id.base_id.get(),
+                            job_name: job.name.clone(),
+                        }
+                    };
+                    self.modal = ModalState::Confirm { action: confirm_action };
                 }
                 EventResult::Continue
             }
@@ -1169,27 +1381,35 @@ impl App {
             }
             KeyAction::ToggleGroupByAccount => {
                 if self.current_view == View::Jobs {
-                    self.jobs_view.show_grouped_by_account = !self.jobs_view.show_grouped_by_account;
+                    self.jobs_view.show_grouped_by_account =
+                        !self.jobs_view.show_grouped_by_account;
                     self.jobs_view.invalidate_cache();
                 }
                 EventResult::Continue
             }
             KeyAction::QuickSearch => {
-                self.mode = AppMode::Filter;
-                self.filter.active = true;
-                self.filter.filter_type = FilterType::QuickSearch;
+                // Open filter modal with current active filter as initial edit buffer
+                let initial_text = self.data.get_filter().unwrap_or_default();
+                self.modal = ModalState::Filter {
+                    edit_buffer: initial_text.clone(),
+                    cursor: initial_text.len(),
+                    filter_type: FilterType::QuickSearch,
+                };
                 EventResult::Continue
             }
             KeyAction::OpenFilter => {
-                self.mode = AppMode::Filter;
-                self.filter.active = true;
-                self.filter.filter_type = FilterType::Advanced;
+                // Open filter modal with current active filter as initial edit buffer
+                let initial_text = self.data.get_filter().unwrap_or_default();
+                self.modal = ModalState::Filter {
+                    edit_buffer: initial_text.clone(),
+                    cursor: initial_text.len(),
+                    filter_type: FilterType::Advanced,
+                };
                 EventResult::Continue
             }
             KeyAction::OpenSort => {
                 if self.current_view == View::Jobs {
-                    self.mode = AppMode::Sort;
-                    self.sort_menu = SortMenuState::new();
+                    self.modal = ModalState::Sort { menu: SortMenuState::new() };
                 }
                 EventResult::Continue
             }
@@ -1198,7 +1418,7 @@ impl App {
                 EventResult::Continue
             }
             KeyAction::ShowHelp => {
-                self.show_help = true;
+                self.modal = ModalState::Help;
                 EventResult::Continue
             }
             KeyAction::CycleAccount => {
@@ -1225,9 +1445,9 @@ impl App {
                 EventResult::Continue
             }
             KeyAction::Escape => {
-                if self.filter.active {
-                    self.filter.clear();
-                    self.filter.active = false;
+                // Clear active filter when pressing escape
+                if self.data.active_filter.is_some() {
+                    self.data.clear_filter();
                     self.jobs_view.invalidate_cache();
                 }
                 EventResult::Continue
@@ -1236,19 +1456,8 @@ impl App {
             // Unhandled - force refresh triggers data refetch
             KeyAction::Refresh => EventResult::Continue,
 
-            // Mouse support
-            KeyAction::MouseScrollUp => {
-                self.navigate_up();
-                EventResult::Continue
-            }
-            KeyAction::MouseScrollDown => {
-                self.navigate_down();
-                EventResult::Continue
-            }
+            // Mouse click (scroll handled by handle_navigation)
             KeyAction::MouseClick { row, column: _ } => {
-                // Handle click to select in list views
-                // Row calculation depends on the current layout
-                // Header is typically at row 0-2, content starts at row 3
                 self.handle_mouse_click(row);
                 EventResult::Continue
             }
@@ -1257,10 +1466,76 @@ impl App {
         }
     }
 
+    /// Handle navigation actions (returns Some if action was handled)
+    fn handle_navigation(&mut self, action: &KeyAction) -> Option<EventResult> {
+        match action {
+            KeyAction::MoveUp | KeyAction::MouseScrollUp => {
+                self.navigate_up();
+                Some(EventResult::Continue)
+            }
+            KeyAction::MoveDown | KeyAction::MouseScrollDown => {
+                self.navigate_down();
+                Some(EventResult::Continue)
+            }
+            KeyAction::MoveToTop => {
+                self.navigate_to_top();
+                Some(EventResult::Continue)
+            }
+            KeyAction::MoveToBottom => {
+                self.navigate_to_bottom();
+                Some(EventResult::Continue)
+            }
+            KeyAction::PageUp => {
+                self.page_up();
+                Some(EventResult::Continue)
+            }
+            KeyAction::PageDown => {
+                self.page_down();
+                Some(EventResult::Continue)
+            }
+            _ => None,
+        }
+    }
+
+    /// Handle view switching actions (returns Some if action was handled)
+    fn handle_view_switch(&mut self, action: &KeyAction) -> Option<EventResult> {
+        match action {
+            KeyAction::SwitchToJobs => {
+                self.switch_view(View::Jobs);
+                Some(EventResult::Continue)
+            }
+            KeyAction::SwitchToNodes => {
+                self.switch_view(View::Nodes);
+                Some(EventResult::Continue)
+            }
+            KeyAction::SwitchToPartitions => {
+                self.switch_view(View::Partitions);
+                Some(EventResult::Continue)
+            }
+            KeyAction::SwitchToPersonal => {
+                self.switch_view(View::Personal);
+                Some(EventResult::Continue)
+            }
+            KeyAction::SwitchToProblems => {
+                self.switch_view(View::Problems);
+                Some(EventResult::Continue)
+            }
+            KeyAction::NextView => {
+                if self.view_has_panels() {
+                    self.cycle_panel();
+                } else {
+                    self.switch_view(self.current_view.next());
+                }
+                Some(EventResult::Continue)
+            }
+            _ => None,
+        }
+    }
+
     /// Handle mouse click to select row in list views
     fn handle_mouse_click(&mut self, row: u16) {
         // Skip if in a modal mode
-        if self.is_modal_active() || self.show_help {
+        if self.modal.is_active() {
             return;
         }
 
@@ -1307,30 +1582,28 @@ impl App {
     fn handle_confirm_action(&mut self, action: KeyAction) -> EventResult {
         match action {
             KeyAction::Escape => {
-                self.confirm_action = None;
-                self.mode = AppMode::Normal;
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             KeyAction::Select => {
                 // Execute the confirmed action
-                if let Some(action) = self.confirm_action.take() {
+                if let ModalState::Confirm { action } = std::mem::take(&mut self.modal) {
                     self.execute_cancel_job(action.job_id());
                 }
-                self.mode = AppMode::Normal;
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             KeyAction::FilterChar('y') | KeyAction::FilterChar('Y') => {
                 // 'y' for yes in confirm dialog
-                if let Some(action) = self.confirm_action.take() {
+                if let ModalState::Confirm { action } = std::mem::take(&mut self.modal) {
                     self.execute_cancel_job(action.job_id());
                 }
-                self.mode = AppMode::Normal;
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             KeyAction::FilterChar('n') | KeyAction::FilterChar('N') => {
                 // 'n' for no in confirm dialog
-                self.confirm_action = None;
-                self.mode = AppMode::Normal;
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             _ => EventResult::Unchanged,
@@ -1341,29 +1614,35 @@ impl App {
     fn handle_sort_action(&mut self, action: KeyAction) -> EventResult {
         match action {
             KeyAction::Escape => {
-                self.mode = AppMode::Normal;
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             KeyAction::MoveUp => {
-                self.sort_menu.move_up();
+                if let Some(menu) = self.modal.sort_menu_mut() {
+                    menu.move_up();
+                }
                 EventResult::Continue
             }
             KeyAction::MoveDown => {
-                self.sort_menu.move_down();
+                if let Some(menu) = self.modal.sort_menu_mut() {
+                    menu.move_down();
+                }
                 EventResult::Continue
             }
             KeyAction::Select => {
-                if let Some(column) = self.sort_menu.selected_column() {
-                    // Toggle direction if same column, otherwise set ascending
-                    if self.jobs_view.sort_column == column {
-                        self.jobs_view.sort_ascending = !self.jobs_view.sort_ascending;
-                    } else {
-                        self.jobs_view.sort_column = column;
-                        self.jobs_view.sort_ascending = true;
+                if let Some(menu) = self.modal.sort_menu() {
+                    if let Some(column) = menu.selected_column() {
+                        // Toggle direction if same column, otherwise set ascending
+                        if self.jobs_view.sort_column == column {
+                            self.jobs_view.sort_ascending = !self.jobs_view.sort_ascending;
+                        } else {
+                            self.jobs_view.sort_column = column;
+                            self.jobs_view.sort_ascending = true;
+                        }
+                        self.jobs_view.invalidate_cache();
                     }
-                    self.jobs_view.invalidate_cache();
                 }
-                self.mode = AppMode::Normal;
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             _ => EventResult::Unchanged,
@@ -1374,26 +1653,25 @@ impl App {
     fn handle_detail_action(&mut self, action: KeyAction) -> EventResult {
         match action {
             KeyAction::Escape | KeyAction::Select => {
-                self.mode = AppMode::Normal;
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             KeyAction::Cancel => {
                 // Allow initiating cancel from detail view
                 if let Some(job) = self.selected_job() {
-                    let action = if job.is_array_job() {
+                    let confirm_action = if job.is_array_job() {
                         ConfirmAction::CancelJobArray {
-                            base_job_id: job.job_id.base_id,
+                            base_job_id: job.job_id.base_id.get(),
                             job_name: job.name.clone(),
                             task_count: job.array_task_count.unwrap_or(1),
                         }
                     } else {
                         ConfirmAction::CancelJob {
-                            job_id: job.job_id.base_id,
+                            job_id: job.job_id.base_id.get(),
                             job_name: job.name.clone(),
                         }
                     };
-                    self.confirm_action = Some(action);
-                    self.mode = AppMode::Confirm;
+                    self.modal = ModalState::Confirm { action: confirm_action };
                 }
                 EventResult::Continue
             }
@@ -1405,35 +1683,60 @@ impl App {
         }
     }
 
-    /// Execute scancel for a job
+    /// Execute scancel for a job asynchronously to avoid UI freeze
+    ///
+    /// Spawns a background task that runs the scancel command and sends
+    /// the result back through the data channel. This ensures the TUI
+    /// remains responsive even if the Slurm scheduler is slow.
     fn execute_cancel_job(&mut self, job_id: u64) {
-        // Note: In a full implementation, this would spawn an async task
-        // For now, we'll execute synchronously and report result
-        let result = std::process::Command::new("scancel")
-            .arg(job_id.to_string())
-            .output();
+        let data_tx = self.data_tx.clone();
 
-        match result {
-            Ok(output) => {
-                if output.status.success() {
-                    self.clipboard_feedback = Some(ClipboardFeedback::success(
-                        format!("Cancelled job {}", job_id)
-                    ));
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    self.last_error = Some((
-                        format!("Failed to cancel job {}: {}", job_id, stderr.trim()),
-                        Instant::now()
-                    ));
+        // Show immediate feedback that cancellation is in progress
+        self.feedback.set_clipboard_feedback(ClipboardFeedback::success(format!(
+            "Cancelling job {}...",
+            job_id
+        )));
+
+        let scancel_path = self.slurm_bin_path.join("scancel");
+
+        // Spawn async task to run scancel in background
+        tokio::spawn(async move {
+            // Run blocking command in a separate thread pool
+            let result = tokio::task::spawn_blocking(move || {
+                use std::process::{Command, Stdio};
+
+                let output = Command::new(&scancel_path)
+                    .arg(job_id.to_string())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output();
+
+                match output {
+                    Ok(out) => {
+                        if out.status.success() {
+                            (true, format!("Cancelled job {}", job_id))
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            (false, format!("Failed to cancel job {}: {}", job_id, stderr.trim()))
+                        }
+                    }
+                    Err(e) => (false, format!("Failed to execute scancel: {}", e)),
                 }
-            }
-            Err(e) => {
-                self.last_error = Some((
-                    format!("Failed to execute scancel: {}", e),
-                    Instant::now()
-                ));
-            }
-        }
+            })
+            .await;
+
+            // Send result back through data channel
+            let (success, message) = match result {
+                Ok((success, msg)) => (success, msg),
+                Err(e) => (false, format!("Task error: {}", e)),
+            };
+
+            let _ = data_tx.send(DataEvent::JobCancelResult {
+                job_id,
+                success,
+                message,
+            }).await;
+        });
     }
 
     /// Copy selected job ID to clipboard
@@ -1444,10 +1747,10 @@ impl App {
             // Try using xclip, xsel, or pbcopy depending on platform
             let result = self.copy_to_clipboard(&job_id_str);
 
-            self.clipboard_feedback = Some(if result {
+            self.feedback.set_clipboard_feedback(if result {
                 ClipboardFeedback::success(format!("Copied: {}", job_id_str))
             } else {
-                ClipboardFeedback::failure(format!("Failed to copy (no clipboard)"))
+                ClipboardFeedback::failure("Failed to copy (no clipboard)".to_string())
             });
         }
     }
@@ -1459,7 +1762,7 @@ impl App {
             ("xclip", vec!["-selection", "clipboard"]),
             ("xsel", vec!["--clipboard", "--input"]),
             ("pbcopy", vec![]),  // macOS
-            ("wl-copy", vec![]),  // Wayland
+            ("wl-copy", vec![]), // Wayland
         ];
 
         for (cmd, args) in clipboard_commands {
@@ -1469,16 +1772,15 @@ impl App {
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
+                && let Some(mut stdin) = child.stdin.take()
             {
-                if let Some(mut stdin) = child.stdin.take() {
-                    use std::io::Write;
-                    if stdin.write_all(text.as_bytes()).is_ok() {
-                        drop(stdin);
-                        if let Ok(status) = child.wait() {
-                            if status.success() {
-                                return true;
-                            }
-                        }
+                use std::io::Write;
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(stdin);
+                    if let Ok(status) = child.wait()
+                        && status.success()
+                    {
+                        return true;
                     }
                 }
             }
@@ -1490,26 +1792,44 @@ impl App {
     fn handle_filter_action(&mut self, action: KeyAction) -> EventResult {
         match action {
             KeyAction::Escape => {
-                self.mode = AppMode::Normal;
-                self.filter.active = false;
+                // Cancel filter editing - discard edit buffer, keep previous filter
+                self.modal = ModalState::None;
                 EventResult::Continue
             }
             KeyAction::Select => {
-                self.mode = AppMode::Normal;
+                // Apply filter - move edit buffer to active filter
+                if let ModalState::Filter { edit_buffer, filter_type, .. } = &self.modal {
+                    self.data.set_filter(edit_buffer.clone(), *filter_type);
+                }
+                self.modal = ModalState::None;
                 self.jobs_view.invalidate_cache();
                 EventResult::Continue
             }
             KeyAction::FilterClear => {
-                self.filter.clear();
+                // Clear the edit buffer
+                if let ModalState::Filter { edit_buffer, cursor, .. } = &mut self.modal {
+                    edit_buffer.clear();
+                    *cursor = 0;
+                }
                 EventResult::Continue
             }
             KeyAction::FilterBackspace => {
-                self.filter.backspace();
+                // Backspace in edit buffer
+                if let ModalState::Filter { edit_buffer, cursor, .. } = &mut self.modal {
+                    if *cursor > 0 {
+                        *cursor -= 1;
+                        edit_buffer.remove(*cursor);
+                    }
+                }
                 self.jobs_view.invalidate_cache();
                 EventResult::Continue
             }
             KeyAction::FilterChar(c) => {
-                self.filter.push(c);
+                // Insert character in edit buffer
+                if let ModalState::Filter { edit_buffer, cursor, .. } = &mut self.modal {
+                    edit_buffer.insert(*cursor, c);
+                    *cursor += 1;
+                }
                 self.jobs_view.invalidate_cache();
                 EventResult::Continue
             }
@@ -1521,47 +1841,47 @@ impl App {
     pub fn handle_data(&mut self, event: DataEvent) -> EventResult {
         match event {
             DataEvent::JobsUpdated(jobs) => {
-                self.jobs.update(jobs);
-                self.jobs_view.list_state.clamp(self.jobs.len());
-                self.last_refresh = Some(Instant::now());
+                self.data.jobs.update(jobs);
+                self.jobs_view.list_state.clamp(self.data.jobs.len());
+                self.timing.last_refresh = Some(Instant::now());
 
                 // Extract unique accounts
-                let accounts: HashSet<_> = self.jobs.data.iter().map(|j| j.account.clone()).collect();
+                let accounts: HashSet<_> =
+                    self.data.jobs.iter().map(|j| j.account.clone()).collect();
                 self.account_context.user_accounts = accounts.into_iter().collect();
                 self.account_context.user_accounts.sort();
 
                 EventResult::Continue
             }
             DataEvent::NodesUpdated(nodes) => {
-                self.nodes.update(nodes);
-                self.nodes_view.list_state.clamp(self.nodes.len());
+                self.data.nodes.update(nodes);
+                self.nodes_view.list_state.clamp(self.data.nodes.len());
                 EventResult::Continue
             }
             DataEvent::PartitionsUpdated(partitions) => {
-                self.partitions.update(partitions);
-                self.partitions_view.list_state.clamp(self.partitions.len());
+                self.data.partitions.update(partitions);
+                self.partitions_view.list_state.clamp(self.data.partitions.len());
                 EventResult::Continue
             }
             DataEvent::FairshareUpdated(entries) => {
-                self.fairshare.update(entries);
+                self.data.fairshare.update(entries);
                 // Build the flattened tree for display
-                let tree_roots = FairshareNode::build_tree(&self.fairshare.data, &self.username);
-                self.fairshare_tree = tree_roots.iter()
-                    .flat_map(|node| node.flatten())
-                    .collect();
+                let entries: Vec<_> = self.data.fairshare.iter().cloned().collect();
+                let tree_roots = FairshareNode::build_tree(&entries, &self.username);
+                self.data.fairshare_tree = tree_roots.iter().flat_map(|node| node.flatten()).collect();
                 EventResult::Continue
             }
             DataEvent::SchedulerStatsUpdated(stats) => {
-                self.scheduler_stats = Some(stats);
+                self.data.scheduler_stats = Some(stats);
                 EventResult::Continue
             }
             DataEvent::FetchError { source, error } => {
-                self.last_error = Some((format!("{}: {}", source, error), Instant::now()));
+                self.feedback.set_error(format!("{}: {}", source, error));
                 EventResult::Continue
             }
             DataEvent::AnimationTick => {
                 // Only redraw if we need animation (e.g., spinner visible)
-                if self.jobs.last_updated.is_none() {
+                if self.data.jobs.last_updated.is_none() {
                     EventResult::Continue
                 } else {
                     EventResult::Unchanged
@@ -1572,6 +1892,20 @@ impl App {
                 self.running = false;
                 EventResult::Quit
             }
+            DataEvent::JobCancelResult {
+                job_id: _,
+                success,
+                message,
+            } => {
+                if success {
+                    self.feedback.set_clipboard_feedback(ClipboardFeedback::success(message));
+                } else {
+                    self.feedback.set_error(message);
+                    // Clear the "Cancelling..." feedback on failure
+                    self.feedback.clear_clipboard_feedback();
+                }
+                EventResult::Continue
+            }
         }
     }
 
@@ -1580,162 +1914,70 @@ impl App {
         self.current_view = view;
     }
 
-    fn navigate_up(&mut self) {
+    /// Helper to apply a navigation operation to the currently active list.
+    /// The closure receives a mutable reference to the active ListState and the list length.
+    /// Returns early (no-op) for views/panels that have no navigable list (e.g., Summary panel).
+    fn with_current_list<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut ListState, usize),
+    {
         let len = self.current_list_len();
         match self.current_view {
-            View::Jobs => self.jobs_view.list_state.move_up(len),
-            View::Nodes => self.nodes_view.list_state.move_up(len),
-            View::Partitions => self.partitions_view.list_state.move_up(len),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => self.personal_view.running_jobs_state.move_up(len),
-                    PersonalPanel::Pending => self.personal_view.pending_jobs_state.move_up(len),
-                    PersonalPanel::Fairshare => self.personal_view.fairshare_state.move_up(len),
-                    PersonalPanel::Summary => {} // Summary has no list
-                }
-            }
-            View::Problems => {
-                match self.problems_view.selected_panel {
-                    ProblemsPanel::Down => self.problems_view.down_nodes_state.move_up(len),
-                    ProblemsPanel::Draining => self.problems_view.draining_nodes_state.move_up(len),
-                }
-            }
+            View::Jobs => f(&mut self.jobs_view.list_state, len),
+            View::Nodes => f(&mut self.nodes_view.list_state, len),
+            View::Partitions => f(&mut self.partitions_view.list_state, len),
+            View::Personal => match self.personal_view.selected_panel {
+                PersonalPanel::Running => f(&mut self.personal_view.running_jobs_state, len),
+                PersonalPanel::Pending => f(&mut self.personal_view.pending_jobs_state, len),
+                PersonalPanel::Fairshare => f(&mut self.personal_view.fairshare_state, len),
+                PersonalPanel::Summary => {} // Summary has no list
+            },
+            View::Problems => match self.problems_view.selected_panel {
+                ProblemsPanel::Down => f(&mut self.problems_view.down_nodes_state, len),
+                ProblemsPanel::Draining => f(&mut self.problems_view.draining_nodes_state, len),
+            },
         }
+    }
+
+    fn navigate_up(&mut self) {
+        self.with_current_list(|state, len| state.move_up(len));
     }
 
     fn navigate_down(&mut self) {
-        let len = self.current_list_len();
-        match self.current_view {
-            View::Jobs => self.jobs_view.list_state.move_down(len),
-            View::Nodes => self.nodes_view.list_state.move_down(len),
-            View::Partitions => self.partitions_view.list_state.move_down(len),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => self.personal_view.running_jobs_state.move_down(len),
-                    PersonalPanel::Pending => self.personal_view.pending_jobs_state.move_down(len),
-                    PersonalPanel::Fairshare => self.personal_view.fairshare_state.move_down(len),
-                    PersonalPanel::Summary => {} // Summary has no list
-                }
-            }
-            View::Problems => {
-                match self.problems_view.selected_panel {
-                    ProblemsPanel::Down => self.problems_view.down_nodes_state.move_down(len),
-                    ProblemsPanel::Draining => self.problems_view.draining_nodes_state.move_down(len),
-                }
-            }
-        }
+        self.with_current_list(|state, len| state.move_down(len));
     }
 
     fn navigate_to_top(&mut self) {
-        match self.current_view {
-            View::Jobs => self.jobs_view.list_state.move_to_top(),
-            View::Nodes => self.nodes_view.list_state.move_to_top(),
-            View::Partitions => self.partitions_view.list_state.move_to_top(),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => self.personal_view.running_jobs_state.move_to_top(),
-                    PersonalPanel::Pending => self.personal_view.pending_jobs_state.move_to_top(),
-                    PersonalPanel::Fairshare => self.personal_view.fairshare_state.move_to_top(),
-                    PersonalPanel::Summary => {}
-                }
-            }
-            View::Problems => {
-                match self.problems_view.selected_panel {
-                    ProblemsPanel::Down => self.problems_view.down_nodes_state.move_to_top(),
-                    ProblemsPanel::Draining => self.problems_view.draining_nodes_state.move_to_top(),
-                }
-            }
-        }
+        self.with_current_list(|state, _len| state.move_to_top());
     }
 
     fn navigate_to_bottom(&mut self) {
-        let len = self.current_list_len();
-        match self.current_view {
-            View::Jobs => self.jobs_view.list_state.move_to_bottom(len),
-            View::Nodes => self.nodes_view.list_state.move_to_bottom(len),
-            View::Partitions => self.partitions_view.list_state.move_to_bottom(len),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => self.personal_view.running_jobs_state.move_to_bottom(len),
-                    PersonalPanel::Pending => self.personal_view.pending_jobs_state.move_to_bottom(len),
-                    PersonalPanel::Fairshare => self.personal_view.fairshare_state.move_to_bottom(len),
-                    PersonalPanel::Summary => {}
-                }
-            }
-            View::Problems => {
-                match self.problems_view.selected_panel {
-                    ProblemsPanel::Down => self.problems_view.down_nodes_state.move_to_bottom(len),
-                    ProblemsPanel::Draining => self.problems_view.draining_nodes_state.move_to_bottom(len),
-                }
-            }
-        }
+        self.with_current_list(|state, len| state.move_to_bottom(len));
     }
 
     fn page_up(&mut self) {
-        let len = self.current_list_len();
-        match self.current_view {
-            View::Jobs => self.jobs_view.list_state.page_up(len),
-            View::Nodes => self.nodes_view.list_state.page_up(len),
-            View::Partitions => self.partitions_view.list_state.page_up(len),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => self.personal_view.running_jobs_state.page_up(len),
-                    PersonalPanel::Pending => self.personal_view.pending_jobs_state.page_up(len),
-                    PersonalPanel::Fairshare => self.personal_view.fairshare_state.page_up(len),
-                    PersonalPanel::Summary => {}
-                }
-            }
-            View::Problems => {
-                match self.problems_view.selected_panel {
-                    ProblemsPanel::Down => self.problems_view.down_nodes_state.page_up(len),
-                    ProblemsPanel::Draining => self.problems_view.draining_nodes_state.page_up(len),
-                }
-            }
-        }
+        self.with_current_list(|state, len| state.page_up(len));
     }
 
     fn page_down(&mut self) {
-        let len = self.current_list_len();
-        match self.current_view {
-            View::Jobs => self.jobs_view.list_state.page_down(len),
-            View::Nodes => self.nodes_view.list_state.page_down(len),
-            View::Partitions => self.partitions_view.list_state.page_down(len),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => self.personal_view.running_jobs_state.page_down(len),
-                    PersonalPanel::Pending => self.personal_view.pending_jobs_state.page_down(len),
-                    PersonalPanel::Fairshare => self.personal_view.fairshare_state.page_down(len),
-                    PersonalPanel::Summary => {}
-                }
-            }
-            View::Problems => {
-                match self.problems_view.selected_panel {
-                    ProblemsPanel::Down => self.problems_view.down_nodes_state.page_down(len),
-                    ProblemsPanel::Draining => self.problems_view.draining_nodes_state.page_down(len),
-                }
-            }
-        }
+        self.with_current_list(|state, len| state.page_down(len));
     }
 
     fn current_list_len(&self) -> usize {
         match self.current_view {
-            View::Jobs => self.jobs.len(),
-            View::Nodes => self.nodes.len(),
-            View::Partitions => self.partitions.len(),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => self.my_running_jobs().len(),
-                    PersonalPanel::Pending => self.my_pending_jobs().len(),
-                    PersonalPanel::Fairshare => self.fairshare_tree.len(),
-                    PersonalPanel::Summary => 0,
-                }
-            }
-            View::Problems => {
-                match self.problems_view.selected_panel {
-                    ProblemsPanel::Down => self.down_nodes().len(),
-                    ProblemsPanel::Draining => self.draining_nodes().len(),
-                }
-            }
+            View::Jobs => self.data.jobs.len(),
+            View::Nodes => self.data.nodes.len(),
+            View::Partitions => self.data.partitions.len(),
+            View::Personal => match self.personal_view.selected_panel {
+                PersonalPanel::Running => self.my_running_jobs().len(),
+                PersonalPanel::Pending => self.my_pending_jobs().len(),
+                PersonalPanel::Fairshare => self.data.fairshare_tree.len(),
+                PersonalPanel::Summary => 0,
+            },
+            View::Problems => match self.problems_view.selected_panel {
+                ProblemsPanel::Down => self.down_nodes().len(),
+                ProblemsPanel::Draining => self.draining_nodes().len(),
+            },
         }
     }
 
@@ -1744,7 +1986,7 @@ impl App {
         match self.current_view {
             View::Personal => {
                 // Determine if fairshare panel should be included (only if data available)
-                let has_fairshare = !self.fairshare_tree.is_empty();
+                let has_fairshare = !self.data.fairshare_tree.is_empty();
                 self.personal_view.selected_panel = match self.personal_view.selected_panel {
                     PersonalPanel::Summary => {
                         if has_fairshare {
@@ -1774,42 +2016,41 @@ impl App {
     }
 
     /// Get the currently selected job (if in Jobs view)
+    #[must_use]
     pub fn selected_job(&self) -> Option<&TuiJobInfo> {
         if self.current_view == View::Jobs {
-            self.jobs.data.get(self.jobs_view.list_state.selected)
+            self.data.jobs.get(self.jobs_view.list_state.selected)
         } else {
             None
         }
     }
 
     /// Check if error should still be displayed
+    #[must_use]
     pub fn should_show_error(&self) -> bool {
-        self.last_error
-            .as_ref()
-            .map(|(_, t)| t.elapsed() < self.error_display_duration)
-            .unwrap_or(false)
+        self.feedback.should_show_error()
     }
 
     /// Get the current error message if it should be shown
+    #[must_use]
     pub fn current_error(&self) -> Option<&str> {
-        if self.should_show_error() {
-            self.last_error.as_ref().map(|(msg, _)| msg.as_str())
-        } else {
-            None
-        }
+        self.feedback.current_error()
     }
 
     /// Compute partition statistics from nodes data
     ///
     /// Groups nodes by their actual Slurm partition name (portable across clusters).
     /// Display order is configurable via config; defaults to alphabetical.
+    #[must_use]
     pub fn compute_partition_stats(&self) -> Vec<PartitionStatus> {
         let mut partition_map: HashMap<String, Vec<&NodeInfo>> = HashMap::new();
 
-        // Group nodes by partition name from Slurm
-        for node in &self.nodes.data {
-            let partition_name = node.partition.name.clone().unwrap_or_else(|| "unknown".to_string());
-            partition_map.entry(partition_name).or_default().push(node);
+        // Group nodes by partition name from Slurm (normalized to lowercase)
+        for node in self.data.nodes.iter() {
+            partition_map
+                .entry(node.partition_name())
+                .or_default()
+                .push(node);
         }
 
         // Use configured partition order, or empty (alphabetical) as default
@@ -1835,63 +2076,75 @@ impl App {
     }
 
     /// Get user's running jobs
+    #[must_use]
     pub fn my_running_jobs(&self) -> Vec<&TuiJobInfo> {
-        self.jobs.data.iter()
+        self.data.jobs
+            .iter()
             .filter(|j| {
-                j.state == JobState::Running &&
-                (self.show_all_jobs || j.user_name == self.username)
+                j.state == JobState::Running && (self.show_all_jobs || j.user_name == self.username)
             })
             .collect()
     }
 
     /// Get user's pending jobs
+    #[must_use]
     pub fn my_pending_jobs(&self) -> Vec<&TuiJobInfo> {
-        self.jobs.data.iter()
+        self.data.jobs
+            .iter()
             .filter(|j| {
-                j.state == JobState::Pending &&
-                (self.show_all_jobs || j.user_name == self.username)
+                j.state == JobState::Pending && (self.show_all_jobs || j.user_name == self.username)
             })
             .collect()
     }
 
     /// Get down nodes
+    #[must_use]
     pub fn down_nodes(&self) -> Vec<&NodeInfo> {
-        self.nodes.data.iter()
+        self.data.nodes
+            .iter()
             .filter(|n| n.is_down() || n.is_fail())
             .collect()
     }
 
     /// Get draining nodes
+    #[must_use]
     pub fn draining_nodes(&self) -> Vec<&NodeInfo> {
-        self.nodes.data.iter()
+        self.data.nodes
+            .iter()
             .filter(|n| n.is_draining() || n.is_drained())
             .collect()
     }
 
     /// Get total running job count
+    #[must_use]
     pub fn running_job_count(&self) -> usize {
-        self.jobs.data.iter()
+        self.data.jobs
+            .iter()
             .filter(|j| j.state == JobState::Running)
             .count()
     }
 
     /// Get total pending job count
+    #[must_use]
     pub fn pending_job_count(&self) -> usize {
-        self.jobs.data.iter()
+        self.data.jobs
+            .iter()
             .filter(|j| j.state == JobState::Pending)
             .count()
     }
 
     /// Get currently selected node (if in Nodes view)
+    #[must_use]
     pub fn selected_node(&self) -> Option<&NodeInfo> {
         if self.current_view == View::Nodes {
-            self.nodes.data.get(self.nodes_view.list_state.selected)
+            self.data.nodes.get(self.nodes_view.list_state.selected)
         } else {
             None
         }
     }
 
     /// Get selected running job from Personal view (if focused on Running panel)
+    #[must_use]
     pub fn personal_running_job(&self) -> Option<&TuiJobInfo> {
         if self.current_view == View::Personal
             && self.personal_view.selected_panel == PersonalPanel::Running
@@ -1905,6 +2158,7 @@ impl App {
     }
 
     /// Get selected pending job from Personal view (if focused on Pending panel)
+    #[must_use]
     pub fn personal_pending_job(&self) -> Option<&TuiJobInfo> {
         if self.current_view == View::Personal
             && self.personal_view.selected_panel == PersonalPanel::Pending
@@ -1918,31 +2172,31 @@ impl App {
     }
 
     /// Get the job to show in detail view (works from Jobs or Personal view)
+    #[must_use]
     pub fn detail_job(&self) -> Option<&TuiJobInfo> {
         match self.current_view {
             View::Jobs => self.selected_job(),
-            View::Personal => {
-                match self.personal_view.selected_panel {
-                    PersonalPanel::Running => {
-                        let jobs = self.my_running_jobs();
-                        let idx = self.personal_view.running_jobs_state.selected;
-                        jobs.get(idx).copied()
-                    }
-                    PersonalPanel::Pending => {
-                        let jobs = self.my_pending_jobs();
-                        let idx = self.personal_view.pending_jobs_state.selected;
-                        jobs.get(idx).copied()
-                    }
-                    PersonalPanel::Fairshare | PersonalPanel::Summary => None,
+            View::Personal => match self.personal_view.selected_panel {
+                PersonalPanel::Running => {
+                    let jobs = self.my_running_jobs();
+                    let idx = self.personal_view.running_jobs_state.selected;
+                    jobs.get(idx).copied()
                 }
-            }
+                PersonalPanel::Pending => {
+                    let jobs = self.my_pending_jobs();
+                    let idx = self.personal_view.pending_jobs_state.selected;
+                    jobs.get(idx).copied()
+                }
+                PersonalPanel::Fairshare | PersonalPanel::Summary => None,
+            },
             _ => None,
         }
     }
 
     /// Get current clipboard feedback if visible
+    #[must_use]
     pub fn current_clipboard_feedback(&self) -> Option<&ClipboardFeedback> {
-        self.clipboard_feedback.as_ref().filter(|f| f.is_visible())
+        self.feedback.current_clipboard_feedback()
     }
 
     /// Get array job summary (for collapsed display)
@@ -1953,13 +2207,17 @@ impl App {
         let mut completed = 0;
         let mut max_elapsed = 0u32;
 
-        for job in &self.jobs.data {
-            if job.job_id.base_id == base_job_id {
+        for job in self.data.jobs.iter() {
+            if job.job_id.base_id.get() == base_job_id {
                 match job.state {
                     JobState::Running => running += 1,
                     JobState::Pending => pending += 1,
-                    JobState::Completed | JobState::Failed | JobState::Cancelled |
-                    JobState::Timeout | JobState::OutOfMemory | JobState::NodeFail => completed += 1,
+                    JobState::Completed
+                    | JobState::Failed
+                    | JobState::Cancelled
+                    | JobState::Timeout
+                    | JobState::OutOfMemory
+                    | JobState::NodeFail => completed += 1,
                     _ => {}
                 }
                 max_elapsed = max_elapsed.max(job.elapsed_seconds);
@@ -1970,6 +2228,7 @@ impl App {
     }
 
     /// Check if a job ID represents a visible job (considering array collapse)
+    #[must_use]
     pub fn is_job_visible(&self, job: &TuiJobInfo) -> bool {
         if !job.is_array_job() {
             return true;
@@ -1979,30 +2238,36 @@ impl App {
         // 1. The array is not collapsed (show all tasks), OR
         // 2. This is the first task of a collapsed array
 
-        if !self.jobs_view.is_array_collapsed(job.job_id.base_id) {
+        if !self.jobs_view.is_array_collapsed(job.job_id.base_id.get()) {
             return true;
         }
 
         // For collapsed arrays, only show the first task as a summary
         // We consider it the "first" if no other task with the same base_id and lower task_id exists
-        job.job_id.array_task_id.map_or(true, |task_id| {
-            !self.jobs.data.iter().any(|other| {
-                other.job_id.base_id == job.job_id.base_id &&
-                other.job_id.array_task_id.map_or(false, |other_id| other_id < task_id)
+        job.job_id.array_task_id.is_none_or(|task_id| {
+            !self.data.jobs.iter().any(|other| {
+                other.job_id.base_id == job.job_id.base_id
+                    && other
+                        .job_id
+                        .array_task_id
+                        .is_some_and(|other_id| other_id < task_id)
             })
         })
     }
 
     /// Get sorted and filtered jobs for display
+    #[must_use]
     pub fn get_display_jobs(&self) -> Vec<&TuiJobInfo> {
-        let filter = self.filter.get_filter();
-        let indices = self.jobs_view.get_sorted_indices(&self.jobs.data, &filter);
-        indices.iter().map(|&i| &self.jobs.data[i]).collect()
+        let filter = self.data.get_filter();
+        let jobs = self.data.jobs.as_slice();
+        let indices = self.jobs_view.get_sorted_indices(jobs, &filter);
+        indices.iter().map(|&i| &jobs[i]).collect()
     }
 
     /// Check if in a modal dialog
+    #[must_use]
     pub fn is_modal_active(&self) -> bool {
-        matches!(self.mode, AppMode::Confirm | AppMode::Detail | AppMode::Sort)
+        self.modal.is_blocking()
     }
 
     /// Export current view data to a file
@@ -2012,8 +2277,8 @@ impl App {
             View::Nodes => self.export_nodes(format),
             View::Partitions => self.export_partitions(format),
             _ => {
-                self.clipboard_feedback = Some(ClipboardFeedback::failure(
-                    "Export not supported for this view".to_string()
+                self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(
+                    "Export not supported for this view".to_string(),
                 ));
             }
         }
@@ -2026,34 +2291,40 @@ impl App {
 
         match format {
             ExportFormat::Json => {
-                let export_data: Vec<serde_json::Value> = jobs.iter().map(|job| {
-                    serde_json::json!({
-                        "job_id": job.job_id.to_string(),
-                        "name": job.name,
-                        "user": job.user_name,
-                        "account": job.account,
-                        "partition": job.partition,
-                        "state": job.state.as_str(),
-                        "state_reason": job.state_reason,
-                        "priority": job.priority,
-                        "qos": job.qos,
-                        "cpus": job.cpus,
-                        "gpus": job.gpu_count,
-                        "gpu_type": job.gpu_type,
-                        "nodes": job.nodes,
-                        "elapsed_seconds": job.elapsed_seconds,
-                        "time_limit_seconds": job.time_limit_seconds,
-                        "working_directory": job.working_directory,
+                let export_data: Vec<serde_json::Value> = jobs
+                    .iter()
+                    .map(|job| {
+                        serde_json::json!({
+                            "job_id": job.job_id.to_string(),
+                            "name": job.name,
+                            "user": job.user_name,
+                            "account": job.account,
+                            "partition": job.partition,
+                            "state": job.state.as_str(),
+                            "state_reason": job.state_reason,
+                            "priority": job.priority,
+                            "qos": job.qos,
+                            "cpus": job.cpus,
+                            "gpus": job.gpu_count,
+                            "gpu_type": job.gpu_type,
+                            "nodes": job.nodes,
+                            "elapsed_seconds": job.elapsed_seconds,
+                            "time_limit_seconds": job.time_limit_seconds,
+                            "working_directory": job.working_directory,
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 let filename = format!("cmon_jobs_{}.json", timestamp);
                 match serde_json::to_string_pretty(&export_data) {
-                    Ok(json_str) => self.write_export_file(&filename, &json_str, jobs.len(), "jobs"),
+                    Ok(json_str) => {
+                        self.write_export_file(&filename, &json_str, jobs.len(), "jobs")
+                    }
                     Err(e) => {
-                        self.clipboard_feedback = Some(ClipboardFeedback::failure(
-                            format!("Failed to serialize jobs: {}", e)
-                        ));
+                        self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(format!(
+                            "Failed to serialize jobs: {}",
+                            e
+                        )));
                     }
                 }
             }
@@ -2094,34 +2365,40 @@ impl App {
 
     /// Export nodes to file (JSON or CSV)
     fn export_nodes(&mut self, format: ExportFormat) {
-        let nodes = &self.nodes.data;
+        let nodes = self.data.nodes.as_slice();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
 
         match format {
             ExportFormat::Json => {
-                let export_data: Vec<serde_json::Value> = nodes.iter().map(|node| {
-                    let gpu_info = node.gpu_info();
-                    serde_json::json!({
-                        "name": node.node_names.nodes.first().unwrap_or(&"".to_string()),
-                        "partition": node.partition.name,
-                        "state": node.primary_state(),
-                        "cpus_allocated": node.cpus.allocated,
-                        "cpus_total": node.cpus.total,
-                        "memory_allocated_mb": node.memory.allocated,
-                        "memory_total_mb": node.memory.minimum,
-                        "gpus_used": gpu_info.used,
-                        "gpus_total": gpu_info.total,
-                        "gpu_type": gpu_info.gpu_type,
+                let export_data: Vec<serde_json::Value> = nodes
+                    .iter()
+                    .map(|node| {
+                        let gpu_info = node.gpu_info();
+                        serde_json::json!({
+                            "name": node.node_names.nodes.first().unwrap_or(&"".to_string()),
+                            "partition": node.partition.name,
+                            "state": node.primary_state(),
+                            "cpus_allocated": node.cpus.allocated,
+                            "cpus_total": node.cpus.total,
+                            "memory_allocated_mb": node.memory.allocated,
+                            "memory_total_mb": node.memory.minimum,
+                            "gpus_used": gpu_info.used,
+                            "gpus_total": gpu_info.total,
+                            "gpu_type": gpu_info.gpu_type,
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 let filename = format!("cmon_nodes_{}.json", timestamp);
                 match serde_json::to_string_pretty(&export_data) {
-                    Ok(json_str) => self.write_export_file(&filename, &json_str, nodes.len(), "nodes"),
+                    Ok(json_str) => {
+                        self.write_export_file(&filename, &json_str, nodes.len(), "nodes")
+                    }
                     Err(e) => {
-                        self.clipboard_feedback = Some(ClipboardFeedback::failure(
-                            format!("Failed to serialize nodes: {}", e)
-                        ));
+                        self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(format!(
+                            "Failed to serialize nodes: {}",
+                            e
+                        )));
                     }
                 }
             }
@@ -2160,29 +2437,35 @@ impl App {
 
         match format {
             ExportFormat::Json => {
-                let export_data: Vec<serde_json::Value> = partitions.iter().map(|p| {
-                    serde_json::json!({
-                        "name": p.name,
-                        "total_nodes": p.total_nodes,
-                        "available_nodes": p.available_nodes,
-                        "down_nodes": p.down_nodes,
-                        "total_cpus": p.total_cpus,
-                        "allocated_cpus": p.allocated_cpus,
-                        "cpu_utilization": p.cpu_utilization(),
-                        "total_gpus": p.total_gpus,
-                        "allocated_gpus": p.allocated_gpus,
-                        "gpu_utilization": p.gpu_utilization(),
-                        "gpu_type": p.gpu_type,
+                let export_data: Vec<serde_json::Value> = partitions
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "total_nodes": p.total_nodes,
+                            "available_nodes": p.available_nodes,
+                            "down_nodes": p.down_nodes,
+                            "total_cpus": p.total_cpus,
+                            "allocated_cpus": p.allocated_cpus,
+                            "cpu_utilization": p.cpu_utilization(),
+                            "total_gpus": p.total_gpus,
+                            "allocated_gpus": p.allocated_gpus,
+                            "gpu_utilization": p.gpu_utilization(),
+                            "gpu_type": p.gpu_type,
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 let filename = format!("cmon_partitions_{}.json", timestamp);
                 match serde_json::to_string_pretty(&export_data) {
-                    Ok(json_str) => self.write_export_file(&filename, &json_str, partitions.len(), "partitions"),
+                    Ok(json_str) => {
+                        self.write_export_file(&filename, &json_str, partitions.len(), "partitions")
+                    }
                     Err(e) => {
-                        self.clipboard_feedback = Some(ClipboardFeedback::failure(
-                            format!("Failed to serialize partitions: {}", e)
-                        ));
+                        self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(format!(
+                            "Failed to serialize partitions: {}",
+                            e
+                        )));
                     }
                 }
             }
@@ -2218,14 +2501,16 @@ impl App {
     fn write_export_file(&mut self, filename: &str, content: &str, count: usize, item_type: &str) {
         match std::fs::write(filename, content) {
             Ok(_) => {
-                self.clipboard_feedback = Some(ClipboardFeedback::success(
-                    format!("Exported {} {} to {}", count, item_type, filename)
-                ));
+                self.feedback.set_clipboard_feedback(ClipboardFeedback::success(format!(
+                    "Exported {} {} to {}",
+                    count, item_type, filename
+                )));
             }
             Err(e) => {
-                self.clipboard_feedback = Some(ClipboardFeedback::failure(
-                    format!("Failed to write {}: {}", filename, e)
-                ));
+                self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(format!(
+                    "Failed to write {}: {}",
+                    filename, e
+                )));
             }
         }
     }
@@ -2259,8 +2544,8 @@ fn job_matches_filter(job: &TuiJobInfo, filter: &Option<String>) -> bool {
 
     // All terms must match (AND logic)
     terms.iter().all(|term| {
-        let (negated, term) = if term.starts_with('!') {
-            (true, &term[1..])
+        let (negated, term) = if let Some(stripped) = term.strip_prefix('!') {
+            (true, stripped)
         } else {
             (false, *term)
         };
@@ -2269,44 +2554,63 @@ fn job_matches_filter(job: &TuiJobInfo, filter: &Option<String>) -> bool {
             // Field-prefixed filter
             let field = &term[..colon_pos].to_lowercase();
             let value = &term[colon_pos + 1..].to_lowercase();
-
-            match field.as_str() {
-                "name" | "n" => job.name.to_lowercase().contains(value),
-                "user" | "u" => job.user_name.to_lowercase().contains(value),
-                "account" | "acct" | "a" => job.account.to_lowercase().contains(value),
-                "partition" | "part" | "p" => job.partition.to_lowercase().contains(value),
-                "state" | "s" => job.state.as_str().to_lowercase().contains(value)
-                    || job.state.short_str().to_lowercase().contains(value),
-                "qos" | "q" => job.qos.to_lowercase().contains(value),
-                "gpu" | "gpus" | "g" => {
-                    if let Ok(count) = value.parse::<u32>() {
-                        job.gpu_count == count
-                    } else if value == "yes" || value == "true" || value == "any" {
-                        job.gpu_count > 0
-                    } else if value == "no" || value == "false" || value == "none" {
-                        job.gpu_count == 0
-                    } else {
-                        // Match GPU type
-                        job.gpu_type.as_ref().map(|t| t.to_lowercase().contains(value)).unwrap_or(false)
-                    }
-                }
-                "node" | "nodes" => job.nodes.to_lowercase().contains(value),
-                "id" | "job" | "jobid" => job.job_id.to_string().contains(value),
-                "reason" | "r" => job.state_reason.to_lowercase().contains(value),
-                _ => false, // Unknown field prefix
-            }
+            job_matches_field(job, field, value)
         } else {
             // Plain text search across multiple fields
-            let value = term.to_lowercase();
-            job.name.to_lowercase().contains(&value)
-                || job.user_name.to_lowercase().contains(&value)
-                || job.account.to_lowercase().contains(&value)
-                || job.partition.to_lowercase().contains(&value)
-                || job.job_id.to_string().contains(&value)
+            job_matches_any_field(job, term)
         };
 
         if negated { !matches } else { matches }
     })
+}
+
+/// Match a job against a specific field
+fn job_matches_field(job: &TuiJobInfo, field: &str, value: &str) -> bool {
+    match field {
+        "name" | "n" => job.name.to_lowercase().contains(value),
+        "user" | "u" => job.user_name.to_lowercase().contains(value),
+        "account" | "acct" | "a" => job.account.to_lowercase().contains(value),
+        "partition" | "part" | "p" => job.partition.to_lowercase().contains(value),
+        "state" | "s" => {
+            job.state.as_str().to_lowercase().contains(value)
+                || job.state.short_str().to_lowercase().contains(value)
+        }
+        "qos" | "q" => job.qos.to_lowercase().contains(value),
+        "gpu" | "gpus" | "g" => job_matches_gpu(job, value),
+        "node" | "nodes" => job.nodes.to_lowercase().contains(value),
+        "id" | "job" | "jobid" => job.job_id.to_string().contains(value),
+        "reason" | "r" => job.state_reason.to_lowercase().contains(value),
+        _ => false, // Unknown field prefix
+    }
+}
+
+/// Match GPU filter (handles count, boolean, or type matching)
+fn job_matches_gpu(job: &TuiJobInfo, value: &str) -> bool {
+    if let Ok(count) = value.parse::<u32>() {
+        job.gpu_count == count
+    } else {
+        match value {
+            "yes" | "true" | "any" => job.gpu_count > 0,
+            "no" | "false" | "none" => job.gpu_count == 0,
+            _ => {
+                // Match GPU type
+                job.gpu_type
+                    .as_ref()
+                    .map(|t| t.to_lowercase().contains(value))
+                    .unwrap_or(false)
+            }
+        }
+    }
+}
+
+/// Match a job against any searchable field (plain text search)
+fn job_matches_any_field(job: &TuiJobInfo, term: &str) -> bool {
+    let value = term.to_lowercase();
+    job.name.to_lowercase().contains(&value)
+        || job.user_name.to_lowercase().contains(&value)
+        || job.account.to_lowercase().contains(&value)
+        || job.partition.to_lowercase().contains(&value)
+        || job.job_id.to_string().contains(&value)
 }
 
 /// Helper to compute partition stats from a list of nodes
@@ -2315,10 +2619,22 @@ fn compute_partition_from_nodes(name: &str, nodes: &[&NodeInfo]) -> PartitionSta
 
     // Node state counts
     let down_nodes = nodes.iter().filter(|n| n.is_down() || n.is_fail()).count() as u32;
-    let draining_nodes = nodes.iter().filter(|n| n.is_draining() || n.is_drained()).count() as u32;
-    let idle_nodes = nodes.iter().filter(|n| n.is_idle() && !n.is_draining() && !n.is_down()).count() as u32;
-    let allocated_nodes = nodes.iter().filter(|n| n.is_allocated() && !n.is_draining()).count() as u32;
-    let mixed_nodes = nodes.iter().filter(|n| n.is_mixed() && !n.is_draining()).count() as u32;
+    let draining_nodes = nodes
+        .iter()
+        .filter(|n| n.is_draining() || n.is_drained())
+        .count() as u32;
+    let idle_nodes = nodes
+        .iter()
+        .filter(|n| n.is_idle() && !n.is_draining() && !n.is_down())
+        .count() as u32;
+    let allocated_nodes = nodes
+        .iter()
+        .filter(|n| n.is_allocated() && !n.is_draining())
+        .count() as u32;
+    let mixed_nodes = nodes
+        .iter()
+        .filter(|n| n.is_mixed() && !n.is_draining())
+        .count() as u32;
     let available_nodes = total_nodes - down_nodes;
 
     // CPU stats
@@ -2326,14 +2642,16 @@ fn compute_partition_from_nodes(name: &str, nodes: &[&NodeInfo]) -> PartitionSta
     let allocated_cpus: u32 = nodes.iter().map(|n| n.cpus.allocated).sum();
 
     // Memory stats (convert from MB to GB)
-    let total_memory_gb: f64 = nodes.iter()
-        .map(|n| n.memory_total() as f64 / 1024.0)  // MB to GB
+    let total_memory_gb: f64 = nodes
+        .iter()
+        .map(|n| n.memory_total() as f64 / 1024.0) // MB to GB
         .sum();
-    let allocated_memory_gb: f64 = nodes.iter()
+    let allocated_memory_gb: f64 = nodes
+        .iter()
         .map(|n| {
             let total = n.memory_total() as f64;
             let free = n.memory_free() as f64;
-            (total - free) / 1024.0  // Used memory in GB
+            (total - free) / 1024.0 // Used memory in GB
         })
         .sum();
 
@@ -2389,10 +2707,7 @@ mod tests {
 
     #[test]
     fn test_job_state_parsing() {
-        assert_eq!(
-            JobState::from_state_string("RUNNING"),
-            JobState::Running
-        );
+        assert_eq!(JobState::from_state_string("RUNNING"), JobState::Running);
         assert_eq!(JobState::from_state_string("PENDING"), JobState::Pending);
         assert_eq!(
             JobState::from_state_string("CANCELLED by 12345"),

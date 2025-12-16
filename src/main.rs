@@ -5,17 +5,19 @@ mod models;
 mod slurm;
 mod tui;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
-use slurm::SlurmInterface;
-use std::io::{self, Write};
-use std::thread;
-use std::time::Duration;
 use crossterm::{
+    cursor::{Hide, Show},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
-    cursor::{Hide, Show},
 };
+use slurm::{SlurmInterface, check_slurm_json_support_with_warnings};
+use std::fs;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "cmon")]
@@ -161,19 +163,52 @@ enum Commands {
     /// Launch interactive TUI mode
     #[command(alias = "ui")]
     Tui,
+
+    /// Generate a template configuration file
+    InitConfig {
+        /// Overwrite existing config file
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let slurm = SlurmInterface::new();
+    // Handle init-config early (before Slurm connection check)
+    if let Some(Commands::InitConfig { force }) = &cli.command {
+        return generate_default_config(*force);
+    }
 
-    // Load config for display settings (shared between CLI and TUI)
-    let config = models::TuiConfig::load();
+    // Load config first (for display settings and slurm path)
+    let (config, config_warnings) = models::TuiConfig::load();
+
+    // Print config warnings for CLI mode (TUI mode displays them in status bar)
+    for warning in &config_warnings {
+        eprintln!("Warning: {}", warning);
+    }
+
+    // Create SlurmInterface with config path (auto-detects if not specified)
+    let slurm = SlurmInterface::with_config(config.system.slurm_bin_path.as_deref());
+
+    // Warn if using fallback path
+    if slurm.is_fallback_path() {
+        eprintln!(
+            "Warning: Could not find Slurm binaries in PATH, using fallback path: {}",
+            slurm.slurm_bin_path.display()
+        );
+    }
 
     // Test Slurm connection
-    if !slurm.test_connection() {
-        eprintln!("Error: Unable to connect to Slurm. Make sure sinfo/squeue are available.");
+    if let Err(err) = slurm.test_connection() {
+        eprintln!("Error: Unable to connect to Slurm: {err}");
+        eprintln!("Searched path: {}", slurm.slurm_bin_path.display());
+        std::process::exit(1);
+    }
+
+    // Check Slurm version and fail if JSON output is not available
+    if !check_slurm_json_support_with_warnings(&slurm.slurm_bin_path) {
+        eprintln!("Error: This tool requires Slurm 21.08 or later for JSON output support.");
         std::process::exit(1);
     }
 
@@ -182,48 +217,113 @@ fn main() -> Result<()> {
     let partition_order = &config.display.partition_order;
 
     match cli.command {
-        Some(Commands::Jobs { all, user, partition, state, watch }) => {
+        Some(Commands::Jobs {
+            all,
+            user,
+            partition,
+            state,
+            watch,
+        }) => {
             if watch > 0.0 {
                 let prefix = node_prefix.clone();
                 watch_loop(watch, move || {
-                    handle_jobs_command(&slurm, all, user.as_deref(), partition.as_deref(), state.as_deref(), &prefix)
+                    handle_jobs_command(
+                        &slurm,
+                        all,
+                        user.as_deref(),
+                        partition.as_deref(),
+                        state.as_deref(),
+                        &prefix,
+                    )
                 })?;
             } else {
-                let output = handle_jobs_command(&slurm, all, user.as_deref(), partition.as_deref(), state.as_deref(), node_prefix)?;
+                let output = handle_jobs_command(
+                    &slurm,
+                    all,
+                    user.as_deref(),
+                    partition.as_deref(),
+                    state.as_deref(),
+                    node_prefix,
+                )?;
                 println!("{}", output);
             }
         }
-        Some(Commands::Nodes { partition, nodelist, all, state, watch }) => {
+        Some(Commands::Nodes {
+            partition,
+            nodelist,
+            all,
+            state,
+            watch,
+        }) => {
             if watch > 0.0 {
                 let prefix = node_prefix.clone();
                 watch_loop(watch, move || {
-                    handle_nodes_command(&slurm, partition.as_deref(), nodelist.as_deref(), all, state.as_deref(), &prefix)
+                    handle_nodes_command(
+                        &slurm,
+                        partition.as_deref(),
+                        nodelist.as_deref(),
+                        all,
+                        state.as_deref(),
+                        &prefix,
+                    )
                 })?;
             } else {
-                let output = handle_nodes_command(&slurm, partition.as_deref(), nodelist.as_deref(), all, state.as_deref(), node_prefix)?;
+                let output = handle_nodes_command(
+                    &slurm,
+                    partition.as_deref(),
+                    nodelist.as_deref(),
+                    all,
+                    state.as_deref(),
+                    node_prefix,
+                )?;
                 println!("{}", output);
             }
         }
-        Some(Commands::Status { partition, user, watch }) => {
+        Some(Commands::Status {
+            partition,
+            user,
+            watch,
+        }) => {
             if watch > 0.0 {
                 let prefix = node_prefix.clone();
                 let order = partition_order.clone();
                 watch_loop(watch, move || {
-                    handle_status_command(&slurm, partition.as_deref(), user.as_deref(), &order, &prefix)
+                    handle_status_command(
+                        &slurm,
+                        partition.as_deref(),
+                        user.as_deref(),
+                        &order,
+                        &prefix,
+                    )
                 })?;
             } else {
-                let output = handle_status_command(&slurm, partition.as_deref(), user.as_deref(), partition_order, node_prefix)?;
+                let output = handle_status_command(
+                    &slurm,
+                    partition.as_deref(),
+                    user.as_deref(),
+                    partition_order,
+                    node_prefix,
+                )?;
                 println!("{}", output);
             }
         }
-        Some(Commands::Partitions { partition, user, watch }) => {
+        Some(Commands::Partitions {
+            partition,
+            user,
+            watch,
+        }) => {
             if watch > 0.0 {
                 let order = partition_order.clone();
                 watch_loop(watch, move || {
                     handle_partitions_command(&slurm, partition.as_deref(), user.as_deref(), &order)
                 })?;
             } else {
-                let output = handle_partitions_command(&slurm, partition.as_deref(), user.as_deref(), partition_order)?;
+                let output = handle_partitions_command(
+                    &slurm,
+                    partition.as_deref(),
+                    user.as_deref(),
+                    partition_order,
+                )?;
                 println!("{}", output);
             }
         }
@@ -231,9 +331,7 @@ fn main() -> Result<()> {
             let username = SlurmInterface::get_current_user();
             if watch > 0.0 {
                 let prefix = node_prefix.clone();
-                watch_loop(watch, move || {
-                    handle_me_command(&slurm, &username, &prefix)
-                })?;
+                watch_loop(watch, move || handle_me_command(&slurm, &username, &prefix))?;
             } else {
                 let output = handle_me_command(&slurm, &username, node_prefix)?;
                 println!("{}", output);
@@ -243,11 +341,28 @@ fn main() -> Result<()> {
             let output = handle_job_command(&slurm, job_id, node_prefix)?;
             println!("{}", output);
         }
-        Some(Commands::History { days, state, partition, all, limit }) => {
-            let output = handle_history_command(&slurm, days, state.as_deref(), partition.as_deref(), all, limit)?;
+        Some(Commands::History {
+            days,
+            state,
+            partition,
+            all,
+            limit,
+        }) => {
+            let output = handle_history_command(
+                &slurm,
+                days,
+                state.as_deref(),
+                partition.as_deref(),
+                all,
+                limit,
+            )?;
             println!("{}", output);
         }
-        Some(Commands::Down { partition, all, watch }) => {
+        Some(Commands::Down {
+            partition,
+            all,
+            watch,
+        }) => {
             if watch > 0.0 {
                 let prefix = node_prefix.clone();
                 watch_loop(watch, move || {
@@ -260,6 +375,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Tui) => {
             tui::run()?;
+        }
+        Some(Commands::InitConfig { .. }) => {
+            unreachable!("InitConfig should be handled before this point")
         }
         None => {
             // Default: show status
@@ -282,7 +400,8 @@ where
 
     ctrlc::set_handler(move || {
         r.store(false, std::sync::atomic::Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     // Enter alternate screen buffer and hide cursor for clean display
     let mut stdout = io::stdout();
@@ -315,9 +434,9 @@ where
 
             // Write everything at once with synchronized update (DEC private mode)
             // This prevents the terminal from rendering until the full frame is written
-            write!(stdout, "\x1B[?2026h")?;  // Begin synchronized update
+            write!(stdout, "\x1B[?2026h")?; // Begin synchronized update
             write!(stdout, "\x1B[H{}\x1B[J", screen_content)?;
-            write!(stdout, "\x1B[?2026l")?;  // End synchronized update
+            write!(stdout, "\x1B[?2026l")?; // End synchronized update
             stdout.flush()?;
 
             // Sleep for the specified interval
@@ -335,6 +454,48 @@ where
     result
 }
 
+/// Generate a template configuration file at ~/.config/cmon/config.toml
+fn generate_default_config(force: bool) -> Result<()> {
+    let config_path = get_user_config_path()?;
+
+    // Check if file already exists
+    if config_path.exists() && !force {
+        bail!(
+            "Config file already exists at {}\nUse --force to overwrite.",
+            config_path.display()
+        );
+    }
+
+    // Create parent directories if needed
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Generate the template config content
+    let config_content = generate_config_template();
+
+    // Write the config file
+    fs::write(&config_path, config_content)?;
+
+    println!("Created config file at {}", config_path.display());
+    println!();
+    println!("Edit this file to customize cmon behavior.");
+    println!("All settings are optional - delete any you don't need.");
+
+    Ok(())
+}
+
+/// Get the user config file path (uses shared logic from TuiConfig)
+fn get_user_config_path() -> Result<PathBuf> {
+    models::TuiConfig::user_config_path()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory. Set HOME or XDG_CONFIG_HOME environment variable."))
+}
+
+/// Generate a well-documented template configuration file
+fn generate_config_template() -> &'static str {
+    include_str!("config_template.toml")
+}
+
 fn handle_jobs_command(
     slurm: &SlurmInterface,
     show_all: bool,
@@ -348,7 +509,12 @@ fn handle_jobs_command(
 
     let states = if let Some(state_str) = state_filter {
         // User provided explicit state filter
-        Some(state_str.split(',').map(|s| s.trim().to_uppercase()).collect())
+        Some(
+            state_str
+                .split(',')
+                .map(|s| s.trim().to_uppercase())
+                .collect(),
+        )
     } else if show_all {
         None
     } else {
@@ -363,7 +529,11 @@ fn handle_jobs_command(
         None,
     )?;
 
-    Ok(display::format_jobs(&jobs, show_all || state_filter.is_some(), node_prefix_strip))
+    Ok(display::format_jobs(
+        &jobs,
+        show_all || state_filter.is_some(),
+        node_prefix_strip,
+    ))
 }
 
 fn handle_nodes_command(
@@ -428,7 +598,10 @@ fn handle_me_command(
     node_prefix_strip: &str,
 ) -> Result<String> {
     let summary = slurm.get_personal_summary(username)?;
-    Ok(display::format_personal_summary(&summary, node_prefix_strip))
+    Ok(display::format_personal_summary(
+        &summary,
+        node_prefix_strip,
+    ))
 }
 
 fn handle_job_command(
@@ -461,11 +634,8 @@ fn handle_history_command(
     };
 
     // Parse state filter
-    let states: Option<Vec<String>> = state_filter.map(|s| {
-        s.split(',')
-            .map(|st| st.trim().to_uppercase())
-            .collect()
-    });
+    let states: Option<Vec<String>> =
+        state_filter.map(|s| s.split(',').map(|st| st.trim().to_uppercase()).collect());
 
     let mut jobs = slurm.get_job_history(
         username.as_deref(),
@@ -521,13 +691,30 @@ fn handle_down_command(
     // Filter to only problem nodes
     let problem_states = if show_all {
         vec![
-            "DOWN", "DRAIN", "DRAINED", "DRAINING", "FAIL", "MAINT",
-            "NOT_RESPONDING", "RESERVED", "POWERED_DOWN", "POWERING_DOWN",
-            "REBOOT_REQUESTED", "REBOOT_ISSUED",
+            "DOWN",
+            "DRAIN",
+            "DRAINED",
+            "DRAINING",
+            "FAIL",
+            "MAINT",
+            "NOT_RESPONDING",
+            "RESERVED",
+            "POWERED_DOWN",
+            "POWERING_DOWN",
+            "REBOOT_REQUESTED",
+            "REBOOT_ISSUED",
         ]
     } else {
         // Default: most critical states only
-        vec!["DOWN", "DRAIN", "DRAINED", "DRAINING", "FAIL", "MAINT", "NOT_RESPONDING"]
+        vec![
+            "DOWN",
+            "DRAIN",
+            "DRAINED",
+            "DRAINING",
+            "FAIL",
+            "MAINT",
+            "NOT_RESPONDING",
+        ]
     };
 
     let problem_nodes: Vec<_> = nodes
@@ -542,5 +729,9 @@ fn handle_down_command(
         })
         .collect();
 
-    Ok(display::format_problem_nodes(&problem_nodes, show_all, node_prefix_strip))
+    Ok(display::format_problem_nodes(
+        &problem_nodes,
+        show_all,
+        node_prefix_strip,
+    ))
 }

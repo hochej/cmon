@@ -14,6 +14,7 @@ pub enum InputEvent {
     /// Mouse input (optional feature)
     Mouse(MouseEvent),
     /// Terminal resize
+    #[allow(dead_code)]
     Resize(u16, u16),
 }
 
@@ -22,8 +23,10 @@ pub enum InputEvent {
 pub enum DataSource {
     Jobs,
     Nodes,
+    #[allow(dead_code)]
     Partitions,
     Fairshare,
+    #[allow(dead_code)]
     SchedulerStats,
 }
 
@@ -52,6 +55,7 @@ pub enum DataEvent {
     NodesUpdated(Vec<crate::models::NodeInfo>),
 
     /// Partitions data updated
+    #[allow(dead_code)]
     PartitionsUpdated(Vec<crate::tui::app::PartitionStatus>),
 
     /// Fairshare data updated (Phase 4)
@@ -64,10 +68,20 @@ pub enum DataEvent {
     FetchError { source: DataSource, error: String },
 
     /// Force immediate refresh of all data
+    #[allow(dead_code)]
     ForceRefresh,
 
     /// Request shutdown
+    #[allow(dead_code)]
     Shutdown,
+
+    /// Job cancellation completed (success or failure)
+    JobCancelResult {
+        #[allow(dead_code)]
+        job_id: u64,
+        success: bool,
+        message: String,
+    },
 }
 
 /// Result of processing an event
@@ -112,8 +126,8 @@ pub enum KeyAction {
     CycleAccount,
     ToggleGroupByAccount,
     ToggleViewMode,
-    ExportData,      // 'e' - Export to JSON (default)
-    ExportDataCsv,   // 'E' - Export to CSV
+    ExportData,    // 'e' - Export to JSON (default)
+    ExportDataCsv, // 'E' - Export to CSV
 
     // UI
     ShowHelp,
@@ -140,12 +154,10 @@ impl KeyAction {
         use crossterm::event::{MouseButton, MouseEventKind};
 
         match event.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                KeyAction::MouseClick {
-                    row: event.row,
-                    column: event.column,
-                }
-            }
+            MouseEventKind::Down(MouseButton::Left) => KeyAction::MouseClick {
+                row: event.row,
+                column: event.column,
+            },
             MouseEventKind::ScrollUp => KeyAction::MouseScrollUp,
             MouseEventKind::ScrollDown => KeyAction::MouseScrollDown,
             _ => KeyAction::Unknown,
@@ -154,7 +166,9 @@ impl KeyAction {
 
     /// Map a key event to an action based on current mode
     pub fn from_key_event(event: KeyEvent, in_filter_mode: bool) -> Self {
-        let KeyEvent { code, modifiers, .. } = event;
+        let KeyEvent {
+            code, modifiers, ..
+        } = event;
 
         // Filter mode has different mappings
         if in_filter_mode {
@@ -251,9 +265,6 @@ mod tests {
         );
 
         // In normal mode, Ctrl+U is page up
-        assert_eq!(
-            KeyAction::from_key_event(event, false),
-            KeyAction::PageUp
-        );
+        assert_eq!(KeyAction::from_key_event(event, false), KeyAction::PageUp);
     }
 }

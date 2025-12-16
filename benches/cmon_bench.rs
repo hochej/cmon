@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::process::Command;
 
 fn benchmark_cmon_status(c: &mut Criterion) {
@@ -34,5 +34,10 @@ fn benchmark_cmon_nodes(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, benchmark_cmon_status, benchmark_cmon_jobs, benchmark_cmon_nodes);
+criterion_group!(
+    benches,
+    benchmark_cmon_status,
+    benchmark_cmon_jobs,
+    benchmark_cmon_nodes
+);
 criterion_main!(benches);

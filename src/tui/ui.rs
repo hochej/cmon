@@ -7,8 +7,25 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs};
 
 use crate::slurm::shorten_node_name;
-use crate::tui::app::{App, AppMode, JobState, NodesViewMode, PartitionStatus, PersonalPanel, ProblemsPanel, TuiJobInfo, View};
+use crate::tui::app::{
+    App, JobState, ModalState, NodesViewMode, PartitionStatus, PersonalPanel, ProblemsPanel,
+    TuiJobInfo, View,
+};
 use crate::tui::theme::Theme;
+
+// ============================================================================
+// Table Rendering Helpers
+// ============================================================================
+
+/// Create a styled table header row from column names
+fn create_table_header<'a>(columns: &[&'a str], theme: &Theme) -> Row<'a> {
+    let header_cells = columns
+        .iter()
+        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
+    Row::new(header_cells)
+        .style(Style::default().bg(theme.header_bg))
+        .height(1)
+}
 
 /// Render the entire TUI
 pub fn render(app: &App, frame: &mut Frame) {
@@ -31,24 +48,13 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_status_bar(app, frame, layout[3], &theme);
 
     // Overlays (render in order of z-index)
-    if app.show_help {
-        render_help_overlay(frame, area, &theme);
-    }
-
-    if app.mode == AppMode::Filter {
-        render_filter_overlay(app, frame, area, &theme);
-    }
-
-    if app.mode == AppMode::Detail {
-        render_job_detail_popup(app, frame, area, &theme);
-    }
-
-    if app.mode == AppMode::Confirm {
-        render_confirm_dialog(app, frame, area, &theme);
-    }
-
-    if app.mode == AppMode::Sort {
-        render_sort_menu(app, frame, area, &theme);
+    match &app.modal {
+        ModalState::Help => render_help_overlay(frame, area, &theme),
+        ModalState::Filter { .. } => render_filter_overlay(app, frame, area, &theme),
+        ModalState::Detail => render_job_detail_popup(app, frame, area, &theme),
+        ModalState::Confirm { .. } => render_confirm_dialog(app, frame, area, &theme),
+        ModalState::Sort { .. } => render_sort_menu(app, frame, area, &theme),
+        ModalState::None => {}
     }
 
     // Clipboard feedback toast (always on top)
@@ -58,25 +64,31 @@ pub fn render(app: &App, frame: &mut Frame) {
 }
 
 fn render_tab_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
-    let titles: Vec<Line> = [View::Jobs, View::Nodes, View::Partitions, View::Personal, View::Problems]
-        .iter()
-        .enumerate()
-        .map(|(i, view)| {
-            let num = format!("[{}]", i + 1);
-            let label = view.label();
-            if *view == app.current_view {
-                Line::from(vec![
-                    Span::styled(num, Style::default().fg(theme.account_highlight)),
-                    Span::styled(label, Style::default().fg(theme.selected_fg).bold()),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled(num, Style::default().fg(theme.border)),
-                    Span::raw(label),
-                ])
-            }
-        })
-        .collect();
+    let titles: Vec<Line> = [
+        View::Jobs,
+        View::Nodes,
+        View::Partitions,
+        View::Personal,
+        View::Problems,
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, view)| {
+        let num = format!("[{}]", i + 1);
+        let label = view.label();
+        if *view == app.current_view {
+            Line::from(vec![
+                Span::styled(num, Style::default().fg(theme.account_highlight)),
+                Span::styled(label, Style::default().fg(theme.selected_fg).bold()),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(num, Style::default().fg(theme.border)),
+                Span::raw(label),
+            ])
+        }
+    })
+    .collect();
 
     let tabs = Tabs::new(titles)
         .select(app.current_view as usize)
@@ -95,17 +107,17 @@ fn render_info_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     };
 
     let account_display = app.account_context.display();
-    let job_count = app.jobs.len();
+    let job_count = app.data.jobs.len();
 
-    let filter_info = if let Some(f) = app.filter.get_filter() {
+    let filter_info = if let Some(f) = app.data.get_filter() {
         format!(" | Filter: {}", f)
     } else {
         String::new()
     };
 
     // Scheduler stats indicator
-    let scheduler_info = if let Some(stats) = &app.scheduler_stats {
-        if stats.available {
+    let scheduler_info = if let Some(stats) = &app.data.scheduler_stats {
+        if stats.is_available() {
             let health = match stats.is_healthy() {
                 Some(true) => "OK",
                 Some(false) => "SLOW",
@@ -124,7 +136,7 @@ fn render_info_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
         job_mode, account_display, job_count, filter_info, scheduler_info
     );
 
-    let stale = app.jobs.is_stale();
+    let stale = app.data.jobs.is_stale();
     let style = if stale {
         Style::default().fg(theme.stale_indicator)
     } else {
@@ -160,8 +172,8 @@ fn render_jobs_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.jobs.is_empty() {
-        let msg = if app.jobs.last_updated.is_none() {
+    if app.data.jobs.is_empty() {
+        let msg = if app.data.jobs.last_updated.is_none() {
             "Loading jobs..."
         } else {
             "No jobs found"
@@ -183,20 +195,14 @@ fn render_jobs_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
 fn render_jobs_flat_list(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     // Filter jobs based on array collapse state
     let visible_jobs: Vec<(usize, &TuiJobInfo)> = app
-        .jobs
-        .data
+        .data.jobs
         .iter()
         .enumerate()
         .filter(|(_, job)| app.is_job_visible(job))
         .collect();
 
     // Table header
-    let header_cells = ["ID", "Name", "Account", "Part", "State", "Time", "GPUs"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
-    let header = Row::new(header_cells)
-        .style(Style::default().bg(theme.header_bg))
-        .height(1);
+    let header = create_table_header(&["ID", "Name", "Account", "Part", "State", "Time", "GPUs"], theme);
 
     // Calculate visible rows
     let available_height = area.height.saturating_sub(1) as usize; // -1 for header
@@ -211,8 +217,8 @@ fn render_jobs_flat_list(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
         .take(available_height)
         .map(|(display_idx, (_, job))| {
             let is_selected = display_idx == selected;
-            let is_collapsed_array = job.is_array_job()
-                && app.jobs_view.is_array_collapsed(job.job_id.base_id);
+            let is_collapsed_array =
+                job.is_array_job() && app.jobs_view.is_array_collapsed(job.job_id.base_id.get());
             job_to_row(job, is_selected, is_collapsed_array, app, theme)
         })
         .collect();
@@ -240,8 +246,7 @@ fn render_jobs_grouped_by_account(app: &App, frame: &mut Frame, area: Rect, them
 
     // Group jobs by account
     let visible_jobs: Vec<&TuiJobInfo> = app
-        .jobs
-        .data
+        .data.jobs
         .iter()
         .filter(|job| app.is_job_visible(job))
         .collect();
@@ -261,14 +266,18 @@ fn render_jobs_grouped_by_account(app: &App, frame: &mut Frame, area: Rect, them
         // Account header row
         let account_summary = format!(
             "{} ({} jobs: {} R, {} P, {} GPUs)",
-            account, jobs.len(), running, pending, total_gpus
+            account,
+            jobs.len(),
+            running,
+            pending,
+            total_gpus
         );
         let header_row = Row::new(vec![
             Cell::from(account_summary).style(
                 Style::default()
                     .fg(theme.account_highlight)
                     .bold()
-                    .add_modifier(Modifier::UNDERLINED)
+                    .add_modifier(Modifier::UNDERLINED),
             ),
         ]);
         rows.push(header_row);
@@ -292,12 +301,7 @@ fn render_jobs_grouped_by_account(app: &App, frame: &mut Frame, area: Rect, them
     }
 
     // Table header
-    let header_cells = ["ID/Account", "Name", "Part", "State", "Time", "GPUs"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
-    let header = Row::new(header_cells)
-        .style(Style::default().bg(theme.header_bg))
-        .height(1);
+    let header = create_table_header(&["ID/Account", "Name", "Part", "State", "Time", "GPUs"], theme);
 
     // Column widths (slightly different for grouped view)
     let widths = [
@@ -327,11 +331,11 @@ fn job_to_row<'a>(
 
     // For collapsed array jobs, show aggregated info
     let (id_str, state_str, state_style) = if is_collapsed_array {
-        let (running, pending, completed, _) = app.array_job_summary(job.job_id.base_id);
+        let (running, pending, completed, _) = app.array_job_summary(job.job_id.base_id.get());
         let total = running + pending + completed;
 
         // Show with collapse indicator
-        let id = format!("v {}[{}]", job.job_id.base_id, total);
+        let id = format!("v {}[{}]", job.job_id.base_id.get(), total);
 
         // Show aggregated state
         let state = if running > 0 && pending > 0 {
@@ -413,13 +417,17 @@ fn render_nodes_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_focused))
-        .title(format!(" Nodes ({}) [v:{}] ", app.nodes.len(), view_mode_indicator));
+        .title(format!(
+            " Nodes ({}) [v:{}] ",
+            app.data.nodes.len(),
+            view_mode_indicator
+        ));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.nodes.is_empty() {
-        let msg = if app.nodes.last_updated.is_none() {
+    if app.data.nodes.is_empty() {
+        let msg = if app.data.nodes.last_updated.is_none() {
             "Loading nodes..."
         } else {
             "No nodes found"
@@ -441,27 +449,21 @@ fn render_nodes_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
 fn render_nodes_list(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     // Split into main table and footer detail
     let chunks = Layout::vertical([
-        Constraint::Min(5),      // Node table
-        Constraint::Length(3),   // Node detail footer
+        Constraint::Min(5),    // Node table
+        Constraint::Length(3), // Node detail footer
     ])
     .split(area);
 
     // Node table
-    let header_cells = ["Name", "Partition", "State", "CPUs", "Memory", "GPUs"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
-    let header = Row::new(header_cells)
-        .style(Style::default().bg(theme.header_bg))
-        .height(1);
+    let header = create_table_header(&["Name", "Partition", "State", "CPUs", "Memory", "GPUs"], theme);
 
     let available_height = chunks[0].height.saturating_sub(1) as usize;
     let selected = app.nodes_view.list_state.selected;
-    let scroll_offset = calculate_scroll_offset(selected, available_height, app.nodes.len());
+    let scroll_offset = calculate_scroll_offset(selected, available_height, app.data.nodes.len());
 
     let node_prefix = &app.config.display.node_prefix_strip;
     let rows: Vec<Row> = app
-        .nodes
-        .data
+        .data.nodes
         .iter()
         .enumerate()
         .skip(scroll_offset)
@@ -498,16 +500,18 @@ fn render_nodes_grid(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
 
     // Split into grid area and detail footer
     let chunks = Layout::vertical([
-        Constraint::Min(5),      // Grid view
-        Constraint::Length(4),   // Node detail footer + legend
+        Constraint::Min(5),    // Grid view
+        Constraint::Length(4), // Node detail footer + legend
     ])
     .split(area);
 
-    // Group nodes by partition for organized display
+    // Group nodes by partition for organized display (normalized to lowercase)
     let mut nodes_by_partition: BTreeMap<String, Vec<&crate::models::NodeInfo>> = BTreeMap::new();
-    for node in &app.nodes.data {
-        let partition = node.partition.name.clone().unwrap_or_else(|| "unknown".to_string());
-        nodes_by_partition.entry(partition).or_default().push(node);
+    for node in app.data.nodes.iter() {
+        nodes_by_partition
+            .entry(node.partition_name())
+            .or_default()
+            .push(node);
     }
 
     // Calculate grid dimensions
@@ -540,7 +544,10 @@ fn render_nodes_grid(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
         if let Some(nodes) = nodes_by_partition.get(&partition_name) {
             // Partition header
             let idle_count = nodes.iter().filter(|n| n.is_idle()).count();
-            let alloc_count = nodes.iter().filter(|n| n.is_allocated() || n.is_mixed()).count();
+            let alloc_count = nodes
+                .iter()
+                .filter(|n| n.is_allocated() || n.is_mixed())
+                .count();
             let down_count = nodes.iter().filter(|n| n.is_down() || n.is_fail()).count();
 
             lines.push(Line::from(vec![
@@ -552,11 +559,20 @@ fn render_nodes_grid(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
                     format!("({} nodes: ", nodes.len()),
                     Style::default().fg(theme.border),
                 ),
-                Span::styled(format!("{} idle", idle_count), Style::default().fg(theme.running)),
+                Span::styled(
+                    format!("{} idle", idle_count),
+                    Style::default().fg(theme.running),
+                ),
                 Span::raw(", "),
-                Span::styled(format!("{} alloc", alloc_count), Style::default().fg(theme.completed)),
+                Span::styled(
+                    format!("{} alloc", alloc_count),
+                    Style::default().fg(theme.completed),
+                ),
                 if down_count > 0 {
-                    Span::styled(format!(", {} down", down_count), Style::default().fg(theme.failed))
+                    Span::styled(
+                        format!(", {} down", down_count),
+                        Style::default().fg(theme.failed),
+                    )
                 } else {
                     Span::raw("")
                 },
@@ -590,8 +606,7 @@ fn render_nodes_grid(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
         }
     }
 
-    let para = Paragraph::new(lines)
-        .style(Style::default().fg(theme.fg));
+    let para = Paragraph::new(lines).style(Style::default().fg(theme.fg));
     frame.render_widget(para, chunks[0]);
 
     // Footer with legend and selected node info
@@ -745,8 +760,8 @@ fn render_partitions_view(app: &App, frame: &mut Frame, area: Rect, theme: &Them
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.nodes.is_empty() {
-        let msg = if app.nodes.last_updated.is_none() {
+    if app.data.nodes.is_empty() {
+        let msg = if app.data.nodes.last_updated.is_none() {
             "Loading partition data..."
         } else {
             "No partition data available"
@@ -769,11 +784,13 @@ fn render_partitions_view(app: &App, frame: &mut Frame, area: Rect, theme: &Them
     }
 
     // Calculate partition card heights (vary based on GPU presence)
-    let partition_heights: Vec<u16> = partition_stats.iter()
-        .map(|p| if p.total_gpus > 0 { 9 } else { 8 })  // Extra line for GPUs
+    let partition_heights: Vec<u16> = partition_stats
+        .iter()
+        .map(|p| if p.total_gpus > 0 { 9 } else { 8 }) // Extra line for GPUs
         .collect();
 
-    let constraints: Vec<Constraint> = partition_heights.iter()
+    let constraints: Vec<Constraint> = partition_heights
+        .iter()
         .map(|h| Constraint::Length(*h))
         .collect();
 
@@ -787,7 +804,12 @@ fn render_partitions_view(app: &App, frame: &mut Frame, area: Rect, theme: &Them
 }
 
 /// Render a single partition card with rich information
-fn render_partition_card(partition: &PartitionStatus, frame: &mut Frame, area: Rect, theme: &Theme) {
+fn render_partition_card(
+    partition: &PartitionStatus,
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+) {
     // Build partition title with status indicators
     let status_indicator = if partition.down_nodes > 0 {
         format!(" {} down", partition.down_nodes)
@@ -819,10 +841,8 @@ fn render_partition_card(partition: &PartitionStatus, frame: &mut Frame, area: R
     frame.render_widget(block, area);
 
     // Split into left (metrics) and right (node states) sections
-    let chunks = Layout::horizontal([
-        Constraint::Percentage(65),
-        Constraint::Percentage(35),
-    ]).split(inner);
+    let chunks =
+        Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).split(inner);
 
     // Left side: Resource utilization bars
     let mut metric_lines: Vec<Line> = Vec::new();
@@ -836,7 +856,7 @@ fn render_partition_card(partition: &PartitionStatus, frame: &mut Frame, area: R
         Span::raw(format!(" {:>5.1}%", cpu_util)),
         Span::styled(
             format!("  {}/{}", partition.allocated_cpus, partition.total_cpus),
-            Style::default().fg(theme.border)
+            Style::default().fg(theme.border),
         ),
     ]));
 
@@ -848,8 +868,12 @@ fn render_partition_card(partition: &PartitionStatus, frame: &mut Frame, area: R
         mem_bar,
         Span::raw(format!(" {:>5.1}%", mem_util)),
         Span::styled(
-            format!("  {:.0}/{:.0}T", partition.allocated_memory_gb / 1024.0, partition.total_memory_gb / 1024.0),
-            Style::default().fg(theme.border)
+            format!(
+                "  {:.0}/{:.0}T",
+                partition.allocated_memory_gb / 1024.0,
+                partition.total_memory_gb / 1024.0
+            ),
+            Style::default().fg(theme.border),
         ),
     ]));
 
@@ -859,12 +883,15 @@ fn render_partition_card(partition: &PartitionStatus, frame: &mut Frame, area: R
         let gpu_bar = create_progress_bar(gpu_util, 25, theme);
         let gpu_label = partition.gpu_type.as_deref().unwrap_or("GPU");
         metric_lines.push(Line::from(vec![
-            Span::styled(format!(" {:<4} ", &gpu_label[..gpu_label.len().min(4)]), Style::default().fg(theme.header_fg).bold()),
+            Span::styled(
+                format!(" {:<4} ", &gpu_label[..gpu_label.len().min(4)]),
+                Style::default().fg(theme.header_fg).bold(),
+            ),
             gpu_bar,
             Span::raw(format!(" {:>5.1}%", gpu_util)),
             Span::styled(
                 format!("  {}/{}", partition.allocated_gpus, partition.total_gpus),
-                Style::default().fg(theme.border)
+                Style::default().fg(theme.border),
             ),
         ]));
     }
@@ -875,13 +902,13 @@ fn render_partition_card(partition: &PartitionStatus, frame: &mut Frame, area: R
         Span::styled(" Jobs ", Style::default().fg(theme.header_fg).bold()),
         Span::styled(
             format!("{} running", partition.running_jobs),
-            Style::default().fg(theme.running)
+            Style::default().fg(theme.running),
         ),
         Span::raw("  "),
         if partition.pending_jobs > 0 {
             Span::styled(
                 format!("{} pending", partition.pending_jobs),
-                Style::default().fg(theme.pending)
+                Style::default().fg(theme.pending),
             )
         } else {
             Span::styled("0 pending", Style::default().fg(theme.border))
@@ -896,7 +923,7 @@ fn render_partition_card(partition: &PartitionStatus, frame: &mut Frame, area: R
 
     state_lines.push(Line::from(Span::styled(
         "Node States",
-        Style::default().fg(theme.header_fg).bold()
+        Style::default().fg(theme.header_fg).bold(),
     )));
 
     // Node state mini-visualization
@@ -956,23 +983,41 @@ fn render_node_state_bar<'a>(partition: &PartitionStatus, theme: &Theme) -> Vec<
     spans.push(Span::raw("["));
 
     if idle_chars > 0 {
-        spans.push(Span::styled("I".repeat(idle_chars), Style::default().fg(theme.idle)));
+        spans.push(Span::styled(
+            "I".repeat(idle_chars),
+            Style::default().fg(theme.idle),
+        ));
     }
     if alloc_chars > 0 {
-        spans.push(Span::styled("A".repeat(alloc_chars), Style::default().fg(theme.running)));
+        spans.push(Span::styled(
+            "A".repeat(alloc_chars),
+            Style::default().fg(theme.running),
+        ));
     }
     if mixed_chars > 0 {
-        spans.push(Span::styled("M".repeat(mixed_chars), Style::default().fg(theme.mixed)));
+        spans.push(Span::styled(
+            "M".repeat(mixed_chars),
+            Style::default().fg(theme.mixed),
+        ));
     }
     if drain_chars > 0 {
-        spans.push(Span::styled("D".repeat(drain_chars), Style::default().fg(theme.draining)));
+        spans.push(Span::styled(
+            "D".repeat(drain_chars),
+            Style::default().fg(theme.draining),
+        ));
     }
     if down_chars > 0 {
-        spans.push(Span::styled("X".repeat(down_chars), Style::default().fg(theme.failed)));
+        spans.push(Span::styled(
+            "X".repeat(down_chars),
+            Style::default().fg(theme.failed),
+        ));
     }
     // Fill remainder with dots for any rounding discrepancy
     if remainder > 0 {
-        spans.push(Span::styled(".".repeat(remainder), Style::default().fg(theme.border)));
+        spans.push(Span::styled(
+            ".".repeat(remainder),
+            Style::default().fg(theme.border),
+        ));
     }
 
     spans.push(Span::raw("]"));
@@ -989,13 +1034,13 @@ fn render_personal_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme)
     frame.render_widget(block, area);
 
     // Determine if we should show fairshare based on available data
-    let show_fairshare = !app.fairshare_tree.is_empty();
+    let show_fairshare = !app.data.fairshare_tree.is_empty();
 
     // Split into sections based on available data
     let chunks = if show_fairshare {
         Layout::vertical([
-            Constraint::Length(6),   // Summary section
-            Constraint::Length(12),  // Fairshare tree
+            Constraint::Length(6),      // Summary section
+            Constraint::Length(12),     // Fairshare tree
             Constraint::Percentage(50), // Running jobs
             Constraint::Percentage(50), // Pending jobs
         ])
@@ -1068,7 +1113,10 @@ fn render_personal_summary(app: &App, frame: &mut Frame, area: Rect, theme: &The
                 app.account_context.display(),
                 Style::default().fg(theme.account_highlight),
             ),
-            Span::raw(format!(" ({} accounts)", app.account_context.user_accounts.len())),
+            Span::raw(format!(
+                " ({} accounts)",
+                app.account_context.user_accounts.len()
+            )),
         ]),
     ];
 
@@ -1090,7 +1138,13 @@ fn render_personal_summary(app: &App, frame: &mut Frame, area: Rect, theme: &The
     frame.render_widget(para, area);
 }
 
-fn render_personal_running_jobs(app: &App, frame: &mut Frame, area: Rect, theme: &Theme, focused: bool) {
+fn render_personal_running_jobs(
+    app: &App,
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    focused: bool,
+) {
     let running_jobs = app.my_running_jobs();
 
     // Highlight border if this panel is focused
@@ -1103,13 +1157,17 @@ fn render_personal_running_jobs(app: &App, frame: &mut Frame, area: Rect, theme:
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(format!(" Running Jobs ({}) {} ", running_jobs.len(), if focused { "[Tab to switch]" } else { "" }));
+        .title(format!(
+            " Running Jobs ({}) {} ",
+            running_jobs.len(),
+            if focused { "[Tab to switch]" } else { "" }
+        ));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if running_jobs.is_empty() {
-        let msg = if app.jobs.last_updated.is_none() {
+        let msg = if app.data.jobs.last_updated.is_none() {
             "Loading jobs..."
         } else {
             "No running jobs"
@@ -1122,12 +1180,7 @@ fn render_personal_running_jobs(app: &App, frame: &mut Frame, area: Rect, theme:
     }
 
     // Table header
-    let header_cells = ["ID", "Name", "Account", "Part", "Elapsed", "Remaining"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
-    let header = Row::new(header_cells)
-        .style(Style::default().bg(theme.header_bg))
-        .height(1);
+    let header = create_table_header(&["ID", "Name", "Account", "Part", "Elapsed", "Remaining"], theme);
 
     let selected_idx = app.personal_view.running_jobs_state.selected;
     let available_height = inner.height.saturating_sub(1) as usize;
@@ -1143,11 +1196,11 @@ fn render_personal_running_jobs(app: &App, frame: &mut Frame, area: Rect, theme:
             let (remaining_str, remaining_color) = if let Some(remaining) = job.time_remaining() {
                 let secs = remaining.as_secs();
                 let color = if secs < 3600 {
-                    theme.progress_crit  // Less than 1 hour - critical (red)
+                    theme.progress_crit // Less than 1 hour - critical (red)
                 } else if secs < 6 * 3600 {
-                    theme.progress_warn  // Less than 6 hours - warning (orange)
+                    theme.progress_warn // Less than 6 hours - warning (orange)
                 } else {
-                    theme.progress_full  // Plenty of time (green)
+                    theme.progress_full // Plenty of time (green)
                 };
                 (format_duration_display(secs), color)
             } else {
@@ -1185,7 +1238,13 @@ fn render_personal_running_jobs(app: &App, frame: &mut Frame, area: Rect, theme:
     frame.render_widget(table, inner);
 }
 
-fn render_personal_pending_jobs(app: &App, frame: &mut Frame, area: Rect, theme: &Theme, focused: bool) {
+fn render_personal_pending_jobs(
+    app: &App,
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    focused: bool,
+) {
     let pending_jobs = app.my_pending_jobs();
 
     // Highlight border if this panel is focused
@@ -1198,13 +1257,17 @@ fn render_personal_pending_jobs(app: &App, frame: &mut Frame, area: Rect, theme:
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(format!(" Pending Jobs ({}) {} ", pending_jobs.len(), if focused { "[Tab to switch]" } else { "" }));
+        .title(format!(
+            " Pending Jobs ({}) {} ",
+            pending_jobs.len(),
+            if focused { "[Tab to switch]" } else { "" }
+        ));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if pending_jobs.is_empty() {
-        let msg = if app.jobs.last_updated.is_none() {
+        let msg = if app.data.jobs.last_updated.is_none() {
             "Loading jobs..."
         } else {
             "No pending jobs"
@@ -1217,12 +1280,7 @@ fn render_personal_pending_jobs(app: &App, frame: &mut Frame, area: Rect, theme:
     }
 
     // Table header
-    let header_cells = ["ID", "Name", "Account", "Part", "Reason", "Est.Start"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
-    let header = Row::new(header_cells)
-        .style(Style::default().bg(theme.header_bg))
-        .height(1);
+    let header = create_table_header(&["ID", "Name", "Account", "Part", "Reason", "Est.Start"], theme);
 
     let selected_idx = app.personal_view.pending_jobs_state.selected;
     let available_height = inner.height.saturating_sub(1) as usize;
@@ -1287,7 +1345,7 @@ fn render_fairshare_tree(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.fairshare_tree.is_empty() {
+    if app.data.fairshare_tree.is_empty() {
         let para = Paragraph::new("Loading fairshare data...")
             .style(Style::default().fg(theme.border))
             .alignment(Alignment::Center);
@@ -1296,20 +1354,27 @@ fn render_fairshare_tree(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
     }
 
     // Create table header
-    let header_cells = ["Account/User", "Share%", "Fairshare", "CPU Hours", "GPU Hours"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
+    let header_cells = [
+        "Account/User",
+        "Share%",
+        "Fairshare",
+        "CPU Hours",
+        "GPU Hours",
+    ]
+    .iter()
+    .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
     let header = Row::new(header_cells)
         .style(Style::default().bg(theme.header_bg))
         .height(1);
 
     let selected_idx = app.personal_view.fairshare_state.selected;
     let available_height = inner.height.saturating_sub(1) as usize;
-    let scroll_offset = calculate_scroll_offset(selected_idx, available_height, app.fairshare_tree.len());
+    let scroll_offset =
+        calculate_scroll_offset(selected_idx, available_height, app.data.fairshare_tree.len());
 
     // Create rows from flattened fairshare tree
     let rows: Vec<Row> = app
-        .fairshare_tree
+        .data.fairshare_tree
         .iter()
         .enumerate()
         .skip(scroll_offset)
@@ -1348,15 +1413,14 @@ fn render_fairshare_tree(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
         .collect();
 
     let widths = [
-        Constraint::Min(20),     // Account/User (with indentation)
-        Constraint::Length(8),   // Share%
-        Constraint::Length(10),  // Fairshare
-        Constraint::Length(12),  // CPU Hours
-        Constraint::Length(12),  // GPU Hours
+        Constraint::Min(20),    // Account/User (with indentation)
+        Constraint::Length(8),  // Share%
+        Constraint::Length(10), // Fairshare
+        Constraint::Length(12), // CPU Hours
+        Constraint::Length(12), // GPU Hours
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header);
+    let table = Table::new(rows, widths).header(header);
 
     frame.render_widget(table, inner);
 }
@@ -1394,8 +1458,8 @@ fn render_problems_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme)
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.nodes.is_empty() {
-        let msg = if app.nodes.last_updated.is_none() {
+    if app.data.nodes.is_empty() {
+        let msg = if app.data.nodes.last_updated.is_none() {
             "Loading node data..."
         } else {
             "No node data available"
@@ -1416,11 +1480,8 @@ fn render_problems_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme)
     }
 
     // Split into down and draining sections
-    let chunks = Layout::vertical([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(inner);
+    let chunks =
+        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
 
     // Down nodes section
     let down_focused = app.problems_view.selected_panel == ProblemsPanel::Down;
@@ -1428,7 +1489,14 @@ fn render_problems_view(app: &App, frame: &mut Frame, area: Rect, theme: &Theme)
 
     // Draining nodes section
     let draining_focused = app.problems_view.selected_panel == ProblemsPanel::Draining;
-    render_draining_nodes_section(app, &draining_nodes, frame, chunks[1], theme, draining_focused);
+    render_draining_nodes_section(
+        app,
+        &draining_nodes,
+        frame,
+        chunks[1],
+        theme,
+        draining_focused,
+    );
 }
 
 fn render_down_nodes_section(
@@ -1449,7 +1517,11 @@ fn render_down_nodes_section(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(format!(" Down Nodes ({}) {} ", nodes.len(), if focused { "[Tab to switch]" } else { "" }));
+        .title(format!(
+            " Down Nodes ({}) {} ",
+            nodes.len(),
+            if focused { "[Tab to switch]" } else { "" }
+        ));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1483,7 +1555,9 @@ fn render_down_nodes_section(
             let reason = match &node.reason {
                 crate::models::ReasonInfo::Empty => String::new(),
                 crate::models::ReasonInfo::String(s) => truncate_string(s, 30),
-                crate::models::ReasonInfo::Object { description } => truncate_string(description, 30),
+                crate::models::ReasonInfo::Object { description } => {
+                    truncate_string(description, 30)
+                }
             };
 
             let row = Row::new(vec![
@@ -1531,7 +1605,11 @@ fn render_draining_nodes_section(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(format!(" Draining Nodes ({}) {} ", nodes.len(), if focused { "[Tab to switch]" } else { "" }));
+        .title(format!(
+            " Draining Nodes ({}) {} ",
+            nodes.len(),
+            if focused { "[Tab to switch]" } else { "" }
+        ));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1565,7 +1643,9 @@ fn render_draining_nodes_section(
             let reason = match &node.reason {
                 crate::models::ReasonInfo::Empty => String::new(),
                 crate::models::ReasonInfo::String(s) => truncate_string(s, 30),
-                crate::models::ReasonInfo::Object { description } => truncate_string(description, 30),
+                crate::models::ReasonInfo::Object { description } => {
+                    truncate_string(description, 30)
+                }
             };
 
             let row = Row::new(vec![
@@ -1600,7 +1680,9 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
 
     // Keybindings line - context-sensitive
     let keybinds = match app.current_view {
-        View::Jobs => " j/k:move  Enter:detail  c:cancel  y:yank  s:sort  /:search  a:toggle  ?:help  q:quit ",
+        View::Jobs => {
+            " j/k:move  Enter:detail  c:cancel  y:yank  s:sort  /:search  a:toggle  ?:help  q:quit "
+        }
         View::Nodes => " j/k:move  v:view-mode  ?:help  q:quit ",
         View::Personal => " j/k:move  Tab:switch panel  ?:help  q:quit ",
         View::Problems => " j/k:move  Tab:switch panel  ?:help  q:quit ",
@@ -1613,11 +1695,11 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     let mut status_parts = Vec::new();
 
     // Show current mode if in modal
-    if app.is_modal_active() {
-        let mode_name = match &app.mode {
-            AppMode::Detail => "DETAIL",
-            AppMode::Confirm => "CONFIRM",
-            AppMode::Sort => "SORT",
+    if app.modal.is_blocking() {
+        let mode_name = match &app.modal {
+            ModalState::Detail => "DETAIL",
+            ModalState::Confirm { .. } => "CONFIRM",
+            ModalState::Sort { .. } => "SORT",
             _ => "",
         };
         if !mode_name.is_empty() {
@@ -1633,7 +1715,11 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
         && (app.jobs_view.sort_column != crate::tui::app::JobSortColumn::JobId
             || !app.jobs_view.sort_ascending)
     {
-        let dir = if app.jobs_view.sort_ascending { "ASC" } else { "DESC" };
+        let dir = if app.jobs_view.sort_ascending {
+            "ASC"
+        } else {
+            "DESC"
+        };
         let col_name = match app.jobs_view.sort_column {
             crate::tui::app::JobSortColumn::JobId => "ID",
             crate::tui::app::JobSortColumn::Name => "Name",
@@ -1654,7 +1740,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     let running = app.running_job_count();
     let pending = app.pending_job_count();
     status_parts.push(Span::styled(
-        format!(" Jobs: "),
+        " Jobs: ".to_string(),
         Style::default().fg(theme.border),
     ));
     status_parts.push(Span::styled(
@@ -1691,7 +1777,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
 
     // Last update time
     status_parts.push(Span::raw(" | "));
-    if let Some(age) = app.jobs.age() {
+    if let Some(age) = app.data.jobs.age() {
         let age_secs = age.as_secs();
         let age_str = if age_secs < 60 {
             format!("{}s", age_secs)
@@ -1699,7 +1785,7 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
             format!("{}m", age_secs / 60)
         };
 
-        if app.jobs.is_stale() {
+        if app.data.jobs.is_stale() {
             status_parts.push(Span::styled(
                 format!("Updated: {} (*STALE*)", age_str),
                 Style::default().fg(theme.stale_indicator),
@@ -1717,7 +1803,25 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
         ));
     }
 
-    // Error display
+    // Config warnings display (persistent until fixed)
+    if !app.feedback.config_warnings.is_empty() {
+        // Show first warning with count if multiple
+        let warning_text = if app.feedback.config_warnings.len() == 1 {
+            format!(" | WARN: {}", app.feedback.config_warnings[0])
+        } else {
+            format!(
+                " | WARN: {} (+{} more)",
+                app.feedback.config_warnings[0],
+                app.feedback.config_warnings.len() - 1
+            )
+        };
+        status_parts.push(Span::styled(
+            warning_text,
+            Style::default().fg(theme.progress_warn),
+        ));
+    }
+
+    // Error display (temporary, auto-dismisses)
     if let Some(error) = app.current_error() {
         status_parts.push(Span::styled(
             format!(" | ERROR: {} ", error),
@@ -1742,9 +1846,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
             Style::default().bold(),
         )]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Navigation", Style::default().fg(theme.account_highlight).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "Navigation",
+            Style::default().fg(theme.account_highlight).bold(),
+        )]),
         Line::from("  j / Down       Move selection down"),
         Line::from("  k / Up         Move selection up"),
         Line::from("  g / Home       Jump to top"),
@@ -1754,9 +1859,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  Mouse click    Select row"),
         Line::from("  Scroll wheel   Navigate up/down"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Views", Style::default().fg(theme.account_highlight).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "Views",
+            Style::default().fg(theme.account_highlight).bold(),
+        )]),
         Line::from("  1              Jobs view"),
         Line::from("  2              Nodes view"),
         Line::from("  3              Partitions view"),
@@ -1764,9 +1870,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  5              Problems view"),
         Line::from("  Tab            Cycle to next view"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Job Actions (Jobs view)", Style::default().fg(theme.account_highlight).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "Job Actions (Jobs view)",
+            Style::default().fg(theme.account_highlight).bold(),
+        )]),
         Line::from("  Enter          View job details"),
         Line::from("  c              Cancel selected job"),
         Line::from("  y              Copy job ID to clipboard"),
@@ -1777,14 +1884,16 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
         Line::from("  A              Cycle account context"),
         Line::from("  Ctrl+g         Toggle group by account"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Node Actions (Nodes view)", Style::default().fg(theme.account_highlight).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "Node Actions (Nodes view)",
+            Style::default().fg(theme.account_highlight).bold(),
+        )]),
         Line::from("  v              Toggle list/grid view"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("General", Style::default().fg(theme.account_highlight).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "General",
+            Style::default().fg(theme.account_highlight).bold(),
+        )]),
         Line::from("  r              Force data refresh"),
         Line::from("  e              Export current view to JSON"),
         Line::from("  E (shift)      Export current view to CSV"),
@@ -1813,7 +1922,15 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
 fn render_filter_overlay(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     use crate::tui::app::FilterType;
 
-    let is_advanced = app.filter.filter_type == FilterType::Advanced;
+    // Get filter state from modal
+    let (filter_input, cursor_pos, filter_type) = match &app.modal {
+        ModalState::Filter { edit_buffer, cursor, filter_type } => {
+            (edit_buffer.as_str(), *cursor, *filter_type)
+        }
+        _ => return,
+    };
+
+    let is_advanced = filter_type == FilterType::Advanced;
 
     // Advanced filter shows syntax hints
     let popup_height = if is_advanced { 6 } else { 3 };
@@ -1826,9 +1943,13 @@ fn render_filter_overlay(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
 
     frame.render_widget(Clear, popup_area);
 
-    let title = if is_advanced { " Advanced Filter " } else { " Quick Search " };
+    let title = if is_advanced {
+        " Advanced Filter "
+    } else {
+        " Quick Search "
+    };
     let prefix = if is_advanced { "filter: " } else { "/" };
-    let input_text = format!("{}{}", prefix, app.filter.input);
+    let input_text = format!("{}{}", prefix, filter_input);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1859,7 +1980,7 @@ fn render_filter_overlay(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
 
         // Show cursor on first line
         frame.set_cursor_position((
-            inner.x + prefix.len() as u16 + app.filter.cursor_position as u16,
+            inner.x + prefix.len() as u16 + cursor_pos as u16,
             inner.y,
         ));
     } else {
@@ -1868,7 +1989,7 @@ fn render_filter_overlay(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
 
         // Show cursor
         frame.set_cursor_position((
-            inner.x + prefix.len() as u16 + app.filter.cursor_position as u16,
+            inner.x + prefix.len() as u16 + cursor_pos as u16,
             inner.y,
         ));
     }
@@ -1950,26 +2071,9 @@ fn create_progress_bar(percent: f64, width: usize, theme: &Theme) -> Span<'stati
 
     let color = theme.progress_color(percent);
 
-    let bar = format!(
-        "[{}{}]",
-        "=".repeat(filled),
-        ".".repeat(empty)
-    );
+    let bar = format!("[{}{}]", "=".repeat(filled), ".".repeat(empty));
 
     Span::styled(bar, Style::default().fg(color))
-}
-
-/// Create a mini progress bar as a String (for table cells)
-fn create_mini_progress_bar(percent: f64, width: usize, theme: &Theme) -> String {
-    let filled = ((percent / 100.0) * width as f64).round() as usize;
-    let empty = width.saturating_sub(filled);
-
-    format!(
-        "[{}{}] {:>3.0}%",
-        "=".repeat(filled),
-        ".".repeat(empty),
-        percent
-    )
 }
 
 // ============================================================================
@@ -1991,7 +2095,9 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
     // Build title with state indicator
     let title = format!(
         " Job {} - {} [{}] ",
-        job.job_id, job.name, job.state.as_str()
+        job.job_id,
+        job.name,
+        job.state.as_str()
     );
 
     let border_color = match job.state {
@@ -2019,7 +2125,10 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
         Span::styled("  State:       ", Style::default().bold()),
         Span::styled(job.state.as_str(), Style::default().fg(state_color).bold()),
         if !job.state_reason.is_empty() && job.state_reason != "None" {
-            Span::styled(format!("  ({})", job.state_reason), Style::default().fg(theme.border))
+            Span::styled(
+                format!("  ({})", job.state_reason),
+                Style::default().fg(theme.border),
+            )
         } else {
             Span::raw("")
         },
@@ -2045,7 +2154,13 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("Time Information", Style::default().fg(theme.account_highlight).bold().underlined()),
+        Span::styled(
+            "Time Information",
+            Style::default()
+                .fg(theme.account_highlight)
+                .bold()
+                .underlined(),
+        ),
     ]));
 
     lines.push(Line::from(vec![
@@ -2098,7 +2213,13 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("Resources", Style::default().fg(theme.account_highlight).bold().underlined()),
+        Span::styled(
+            "Resources",
+            Style::default()
+                .fg(theme.account_highlight)
+                .bold()
+                .underlined(),
+        ),
     ]));
 
     // CPUs
@@ -2124,9 +2245,15 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
     if job.gpu_count > 0 {
         lines.push(Line::from(vec![
             Span::styled("  GPUs:        ", Style::default().bold()),
-            Span::styled(format!("{}", job.gpu_count), Style::default().fg(theme.running)),
+            Span::styled(
+                format!("{}", job.gpu_count),
+                Style::default().fg(theme.running),
+            ),
             if let Some(ref gpu_type) = job.gpu_type {
-                Span::styled(format!(" ({})", gpu_type), Style::default().fg(theme.border))
+                Span::styled(
+                    format!(" ({})", gpu_type),
+                    Style::default().fg(theme.border),
+                )
             } else {
                 Span::raw("")
             },
@@ -2138,7 +2265,14 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
         lines.push(Line::from(vec![
             Span::styled("  Nodes:       ", Style::default().bold()),
             Span::raw(&job.nodes),
-            Span::styled(format!("  ({} node{})", job.node_count, if job.node_count != 1 { "s" } else { "" }), Style::default().fg(theme.border)),
+            Span::styled(
+                format!(
+                    "  ({} node{})",
+                    job.node_count,
+                    if job.node_count != 1 { "s" } else { "" }
+                ),
+                Style::default().fg(theme.border),
+            ),
         ]));
     }
 
@@ -2148,27 +2282,45 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("Paths", Style::default().fg(theme.account_highlight).bold().underlined()),
+        Span::styled(
+            "Paths",
+            Style::default()
+                .fg(theme.account_highlight)
+                .bold()
+                .underlined(),
+        ),
     ]));
 
     lines.push(Line::from(vec![
         Span::styled("  Work Dir:    ", Style::default().bold()),
-        Span::styled(truncate_string(&job.working_directory, 55), Style::default().fg(theme.fg)),
+        Span::styled(
+            truncate_string(&job.working_directory, 55),
+            Style::default().fg(theme.fg),
+        ),
     ]));
 
     // Stdout path
     if !job.stdout_path.is_empty() && job.stdout_path != "/dev/null" {
         lines.push(Line::from(vec![
             Span::styled("  Stdout:      ", Style::default().bold()),
-            Span::styled(truncate_string(&job.stdout_path, 55), Style::default().fg(theme.border)),
+            Span::styled(
+                truncate_string(&job.stdout_path, 55),
+                Style::default().fg(theme.border),
+            ),
         ]));
     }
 
     // Stderr path (only show if different from stdout)
-    if !job.stderr_path.is_empty() && job.stderr_path != "/dev/null" && job.stderr_path != job.stdout_path {
+    if !job.stderr_path.is_empty()
+        && job.stderr_path != "/dev/null"
+        && job.stderr_path != job.stdout_path
+    {
         lines.push(Line::from(vec![
             Span::styled("  Stderr:      ", Style::default().bold()),
-            Span::styled(truncate_string(&job.stderr_path, 55), Style::default().fg(theme.border)),
+            Span::styled(
+                truncate_string(&job.stderr_path, 55),
+                Style::default().fg(theme.border),
+            ),
         ]));
     }
 
@@ -2179,7 +2331,13 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled("Dependencies", Style::default().fg(theme.account_highlight).bold().underlined()),
+            Span::styled(
+                "Dependencies",
+                Style::default()
+                    .fg(theme.account_highlight)
+                    .bold()
+                    .underlined(),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::styled("  Depends on:  ", Style::default().bold()),
@@ -2194,7 +2352,13 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled("Array Job", Style::default().fg(theme.account_highlight).bold().underlined()),
+            Span::styled(
+                "Array Job",
+                Style::default()
+                    .fg(theme.account_highlight)
+                    .bold()
+                    .underlined(),
+            ),
         ]));
         if let Some(array_id) = job.array_job_id {
             lines.push(Line::from(vec![
@@ -2209,12 +2373,24 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
         let total = job.array_task_count.unwrap_or(0);
         lines.push(Line::from(vec![
             Span::styled("  Tasks:       ", Style::default().bold()),
-            Span::styled(format!("{} running", running), Style::default().fg(theme.running)),
+            Span::styled(
+                format!("{} running", running),
+                Style::default().fg(theme.running),
+            ),
             Span::raw("  "),
-            Span::styled(format!("{} pending", pending), Style::default().fg(theme.pending)),
+            Span::styled(
+                format!("{} pending", pending),
+                Style::default().fg(theme.pending),
+            ),
             Span::raw("  "),
-            Span::styled(format!("{} done", completed), Style::default().fg(theme.completed)),
-            Span::styled(format!("  (/{} total)", total), Style::default().fg(theme.border)),
+            Span::styled(
+                format!("{} done", completed),
+                Style::default().fg(theme.completed),
+            ),
+            Span::styled(
+                format!("  (/{} total)", total),
+                Style::default().fg(theme.border),
+            ),
         ]));
     }
 
@@ -2252,8 +2428,7 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
         Span::styled(" Copy ID", Style::default().fg(theme.border)),
     ]));
 
-    let para = Paragraph::new(lines)
-        .style(Style::default().fg(theme.fg));
+    let para = Paragraph::new(lines).style(Style::default().fg(theme.fg));
     frame.render_widget(para, inner);
 }
 
@@ -2262,7 +2437,7 @@ fn render_confirm_dialog(app: &App, frame: &mut Frame, area: Rect, theme: &Theme
     let popup_area = centered_rect(50, 25, area);
     frame.render_widget(Clear, popup_area);
 
-    let Some(action) = &app.confirm_action else {
+    let Some(action) = app.modal.confirm_action() else {
         return;
     };
 
@@ -2310,15 +2485,23 @@ fn render_sort_menu(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
+    let Some(sort_menu) = app.modal.sort_menu() else {
+        return;
+    };
+
     let mut lines = vec![Line::from("")];
 
-    for (i, (label, column)) in app.sort_menu.columns.iter().enumerate() {
-        let is_selected = i == app.sort_menu.selected;
+    for (i, (label, column)) in sort_menu.columns.iter().enumerate() {
+        let is_selected = i == sort_menu.selected;
         let is_current = *column == app.jobs_view.sort_column;
 
         let prefix = if is_selected { "> " } else { "  " };
         let suffix = if is_current {
-            if app.jobs_view.sort_ascending { " [ASC]" } else { " [DESC]" }
+            if app.jobs_view.sort_ascending {
+                " [ASC]"
+            } else {
+                " [DESC]"
+            }
         } else {
             ""
         };
@@ -2338,12 +2521,12 @@ fn render_sort_menu(app: &App, frame: &mut Frame, area: Rect, theme: &Theme) {
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  [Enter] Select  [Esc] Cancel", Style::default().fg(theme.border)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "  [Enter] Select  [Esc] Cancel",
+        Style::default().fg(theme.border),
+    )]));
 
-    let para = Paragraph::new(lines)
-        .style(Style::default().fg(theme.fg));
+    let para = Paragraph::new(lines).style(Style::default().fg(theme.fg));
     frame.render_widget(para, inner);
 }
 
