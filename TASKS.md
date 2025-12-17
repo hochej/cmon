@@ -659,19 +659,27 @@ creating a new `PersonalJobType` enum, following the pattern established in Phas
 because the row rendering logic differs significantly (running jobs have color-coded time
 remaining display while pending jobs show reason and estimated start).
 
-### 5.5 Decompose `render_job_detail_popup()`
+### 5.5 Decompose `render_job_detail_popup()` [DONE]
 
-Extract section builders into `overlays.rs`:
+Extracted section builders into `overlays.rs`:
 
 ```rust
 fn build_job_header_section(job: &TuiJobInfo, theme: &Theme) -> Vec<Line>;
 fn build_time_section(job: &TuiJobInfo, theme: &Theme) -> Vec<Line>;
 fn build_resources_section(job: &TuiJobInfo, theme: &Theme) -> Vec<Line>;
 fn build_paths_section(job: &TuiJobInfo, theme: &Theme) -> Vec<Line>;
-fn build_array_section(job: &TuiJobInfo, app: &App, theme: &Theme) -> Vec<Line>;
+fn build_extras_section(job: &TuiJobInfo, theme: &Theme) -> Vec<Line>;
+fn build_footer_section(theme: &Theme) -> Vec<Line>;
 ```
 
-**Savings:** ~150 lines (net)
+**Key decisions:**
+- Renamed `build_array_section` to `build_extras_section` - handles dependencies, array job info,
+  priority, and constraint (all optional job configuration details)
+- Added `build_footer_section` for keybindings (kept separate for clarity)
+- None of the helpers need `app: &App` - they work purely on `TuiJobInfo` and `Theme`
+- The main `render_job_detail_popup` is now ~45 lines (down from ~280 lines)
+
+**Actual savings:** ~235 lines (280 -> 45 in main function) reorganized into focused helpers
 
 ---
 
