@@ -19,6 +19,35 @@ use tabled::{
 // ============================================================================
 // All boxes use 78-character visible width (80 total with borders)
 
+/// Type-safe color specification for box drawing.
+///
+/// Replaces stringly-typed color API (e.g., `"green"`) with compile-time checked
+/// enum variants, preventing typos and ensuring exhaustive matching.
+///
+/// Note: `Yellow` and `Blue` are provided for API completeness. Currently only
+/// `Green` and `Red` are used for colored boxes; the default `pad_line()` function
+/// uses `.blue()` directly for non-colored borders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Yellow and Blue kept for API completeness
+pub enum BoxColor {
+    Green,
+    Red,
+    Yellow,
+    Blue,
+}
+
+impl BoxColor {
+    /// Apply this color to the given text, returning a colored string.
+    fn apply(&self, text: &str) -> String {
+        match self {
+            BoxColor::Green => text.green().to_string(),
+            BoxColor::Red => text.red().to_string(),
+            BoxColor::Yellow => text.yellow().to_string(),
+            BoxColor::Blue => text.blue().to_string(),
+        }
+    }
+}
+
 /// Visible content width inside the box (excluding border characters)
 const BOX_WIDTH: usize = 78;
 
@@ -62,37 +91,18 @@ fn box_empty() -> &'static str {
 }
 
 /// Create a colored top border with title
-fn box_top_colored(title: &str, color: &str) -> String {
-    let top = box_top(title);
-    match color {
-        "green" => top.green().to_string(),
-        "red" => top.red().to_string(),
-        "yellow" => top.yellow().to_string(),
-        "blue" => top.blue().to_string(),
-        _ => top,
-    }
+fn box_top_colored(title: &str, color: BoxColor) -> String {
+    color.apply(&box_top(title))
 }
 
 /// Create a colored bottom border
-fn box_bottom_colored(color: &str) -> String {
-    match color {
-        "green" => box_chars::BOTTOM.green().to_string(),
-        "red" => box_chars::BOTTOM.red().to_string(),
-        "yellow" => box_chars::BOTTOM.yellow().to_string(),
-        "blue" => box_chars::BOTTOM.blue().to_string(),
-        _ => box_chars::BOTTOM.to_string(),
-    }
+fn box_bottom_colored(color: BoxColor) -> String {
+    color.apply(box_chars::BOTTOM)
 }
 
 /// Create a colored empty line
-fn box_empty_colored(color: &str) -> String {
-    match color {
-        "green" => box_chars::EMPTY.green().to_string(),
-        "red" => box_chars::EMPTY.red().to_string(),
-        "yellow" => box_chars::EMPTY.yellow().to_string(),
-        "blue" => box_chars::EMPTY.blue().to_string(),
-        _ => box_chars::EMPTY.to_string(),
-    }
+fn box_empty_colored(color: BoxColor) -> String {
+    color.apply(box_chars::EMPTY)
 }
 
 
@@ -1333,14 +1343,14 @@ fn find_break_point(s: &str, max_width: usize) -> usize {
 pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_strip: &str) -> String {
     if nodes.is_empty() {
         let mut output = String::new();
-        output.push_str(&format!("\n{}\n", box_top_colored(" Cluster Health ", "green")));
-        output.push_str(&format!("{}\n", box_empty_colored("green")));
+        output.push_str(&format!("\n{}\n", box_top_colored(" Cluster Health ", BoxColor::Green)));
+        output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Green)));
         output.push_str(&format!(
             "{}\n",
-            pad_line_colored("  All nodes are healthy! No issues detected.", "green")
+            pad_line_colored("  All nodes are healthy! No issues detected.", BoxColor::Green)
         ));
-        output.push_str(&format!("{}\n", box_empty_colored("green")));
-        output.push_str(&format!("{}\n", box_bottom_colored("green")));
+        output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Green)));
+        output.push_str(&format!("{}\n", box_bottom_colored(BoxColor::Green)));
         return output;
     }
 
@@ -1375,8 +1385,8 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
     }
 
     // Summary header
-    output.push_str(&format!("\n{}\n", box_top_colored(" Problem Nodes ", "red")));
-    output.push_str(&format!("{}\n", box_empty_colored("red")));
+    output.push_str(&format!("\n{}\n", box_top_colored(" Problem Nodes ", BoxColor::Red)));
+    output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Red)));
 
     // Summary counts
     let total_cpus: u32 = nodes.iter().map(|n| n.cpus.total).sum();
@@ -1392,13 +1402,13 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             String::new()
         }
     );
-    output.push_str(&format!("{}\n", pad_line_colored(&summary, "red")));
+    output.push_str(&format!("{}\n", pad_line_colored(&summary, BoxColor::Red)));
 
-    output.push_str(&format!("{}\n", box_empty_colored("red")));
+    output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Red)));
 
     // Breakdown by category
     let breakdown_header = format!("  {}", "Breakdown:".bold().underline());
-    output.push_str(&format!("{}\n", pad_line_colored(&breakdown_header, "red")));
+    output.push_str(&format!("{}\n", pad_line_colored(&breakdown_header, BoxColor::Red)));
 
     if !down_nodes.is_empty() {
         let down_cpus: u32 = down_nodes.iter().map(|n| n.cpus.total).sum();
@@ -1408,7 +1418,7 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             down_nodes.len().to_string().red(),
             down_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&down_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&down_line, BoxColor::Red)));
     }
 
     if !drain_nodes.is_empty() {
@@ -1419,7 +1429,7 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             drain_nodes.len().to_string().yellow(),
             drain_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&drain_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&drain_line, BoxColor::Red)));
     }
 
     if !maint_nodes.is_empty() {
@@ -1430,7 +1440,7 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             maint_nodes.len().to_string().cyan(),
             maint_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&maint_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&maint_line, BoxColor::Red)));
     }
 
     if show_all && !other_nodes.is_empty() {
@@ -1441,11 +1451,11 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             other_nodes.len().to_string().bright_black(),
             other_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&other_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&other_line, BoxColor::Red)));
     }
 
-    output.push_str(&format!("{}\n", box_empty_colored("red")));
-    output.push_str(&format!("{}\n", box_bottom_colored("red")));
+    output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Red)));
+    output.push_str(&format!("{}\n", box_bottom_colored(BoxColor::Red)));
 
     // Detailed table
     output.push('\n');
@@ -1536,7 +1546,7 @@ fn format_problem_nodes_table(nodes: &[NodeInfo], node_prefix_strip: &str) -> St
 }
 
 /// Pad line with colored borders
-fn pad_line_colored(content: &str, color: &str) -> String {
+fn pad_line_colored(content: &str, color: BoxColor) -> String {
     let visible_len = strip_ansi(content).chars().count();
     let padding = if visible_len < BOX_WIDTH {
         " ".repeat(BOX_WIDTH - visible_len)
@@ -1544,29 +1554,13 @@ fn pad_line_colored(content: &str, color: &str) -> String {
         String::new()
     };
 
-    match color {
-        "green" => format!(
-            "{}{}{}{}",
-            box_chars::LEFT.green(),
-            content,
-            padding,
-            box_chars::RIGHT.green()
-        ),
-        "red" => format!(
-            "{}{}{}{}",
-            box_chars::LEFT.red(),
-            content,
-            padding,
-            box_chars::RIGHT.red()
-        ),
-        _ => format!(
-            "{}{}{}{}",
-            box_chars::LEFT.blue(),
-            content,
-            padding,
-            box_chars::RIGHT.blue()
-        ),
-    }
+    format!(
+        "{}{}{}{}",
+        color.apply(box_chars::LEFT),
+        content,
+        padding,
+        color.apply(box_chars::RIGHT)
+    )
 }
 
 #[cfg(test)]

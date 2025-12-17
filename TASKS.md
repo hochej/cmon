@@ -685,12 +685,13 @@ fn build_footer_section(theme: &Theme) -> Vec<Line>;
 
 ## Phase 6: Display Simplification
 
-### 6.1 Create BoxColor Enum (Type Safety)
+### 6.1 Create BoxColor Enum (Type Safety) [DONE]
 
-Replace stringly-typed color API:
+Replaced stringly-typed color API with type-safe `BoxColor` enum:
 
 ```rust
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Yellow and Blue kept for API completeness
 pub enum BoxColor { Green, Red, Yellow, Blue }
 
 impl BoxColor {
@@ -704,6 +705,14 @@ impl BoxColor {
     }
 }
 ```
+
+**Refactored functions:**
+- `box_top_colored(title, color: BoxColor)` - 10 lines -> 3 lines
+- `box_bottom_colored(color: BoxColor)` - 9 lines -> 3 lines
+- `box_empty_colored(color: BoxColor)` - 9 lines -> 3 lines
+- `pad_line_colored(content, color: BoxColor)` - 23 lines -> 14 lines
+
+**Savings:** ~31 lines + compile-time type safety (no more typos like `"gren"`)
 
 ### 6.2 Decompose `format_job_details()`
 
