@@ -556,7 +556,21 @@ Split `src/tui/ui.rs` (2,532 lines) into `src/tui/ui/` directory with logical su
 - Status bar and info bar kept in mod.rs as they access multiple view states
 - Total: ~2,615 lines (slight increase from imports/headers, expected for better organization)
 
-### 5.2 Create `src/tui/ui/widgets.rs`
+### 5.2 Create `src/tui/ui/widgets.rs` [DONE]
+
+Added `section_header()` and `detail_row()` helpers to widgets.rs, refactoring
+`render_job_detail_popup()` in overlays.rs to use them. The more complex proposed
+helpers (`render_panel()` and `render_table()`) were not implemented as they would
+add abstraction without clear benefit - each usage has unique variations that don't
+fit a single pattern cleanly.
+
+**Implemented:**
+- `section_header(title, theme)` - Creates styled section headers for detail popups
+- `detail_row(label, value)` - Creates simple key-value detail rows
+
+**Savings:** ~26 lines (net reduction)
+
+**Original proposed patterns (preserved for reference):**
 
 Shared rendering patterns:
 

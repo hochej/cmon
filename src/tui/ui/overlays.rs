@@ -10,7 +10,7 @@ use crate::models::JobState;
 use crate::tui::app::{App, ClipboardFeedback, FilterType, ModalState};
 use crate::tui::theme::Theme;
 
-use super::widgets::centered_rect;
+use super::widgets::{centered_rect, detail_row, section_header};
 
 pub fn render_help_overlay(frame: &mut Frame, area: Rect, theme: &Theme) {
     let popup_area = centered_rect(65, 80, area);
@@ -241,16 +241,7 @@ pub fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: 
 
     // TIME INFORMATION
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            "Time Information",
-            Style::default()
-                .fg(theme.account_highlight)
-                .bold()
-                .underlined(),
-        ),
-    ]));
+    lines.push(section_header("Time Information", theme));
 
     lines.push(Line::from(vec![
         Span::styled("  Elapsed:     ", Style::default().bold()),
@@ -298,16 +289,7 @@ pub fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: 
 
     // RESOURCES
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            "Resources",
-            Style::default()
-                .fg(theme.account_highlight)
-                .bold()
-                .underlined(),
-        ),
-    ]));
+    lines.push(section_header("Resources", theme));
 
     // CPUs
     lines.push(Line::from(vec![
@@ -365,16 +347,7 @@ pub fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: 
 
     // PATHS
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            "Paths",
-            Style::default()
-                .fg(theme.account_highlight)
-                .bold()
-                .underlined(),
-        ),
-    ]));
+    lines.push(section_header("Paths", theme));
 
     lines.push(Line::from(vec![
         Span::styled("  Work Dir:    ", Style::default().bold()),
@@ -412,40 +385,16 @@ pub fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: 
     // DEPENDENCIES (if any)
     if !job.dependency.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(
-                "Dependencies",
-                Style::default()
-                    .fg(theme.account_highlight)
-                    .bold()
-                    .underlined(),
-            ),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Depends on:  ", Style::default().bold()),
-            Span::raw(truncate_string(&job.dependency, 55)),
-        ]));
+        lines.push(section_header("Dependencies", theme));
+        lines.push(detail_row("Depends on:  ", &truncate_string(&job.dependency, 55)));
     }
 
     // ARRAY JOB INFO
     if job.is_array_job() {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(
-                "Array Job",
-                Style::default()
-                    .fg(theme.account_highlight)
-                    .bold()
-                    .underlined(),
-            ),
-        ]));
+        lines.push(section_header("Array Job", theme));
         if let Some(array_id) = job.array_job_id {
-            lines.push(Line::from(vec![
-                Span::styled("  Array ID:    ", Style::default().bold()),
-                Span::raw(format!("{}", array_id)),
-            ]));
+            lines.push(detail_row("Array ID:    ", &array_id.to_string()));
         }
         // Show task progress
         let running = job.array_tasks_running.unwrap_or(0);

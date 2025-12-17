@@ -60,3 +60,36 @@ pub fn create_progress_bar(percent: f64, width: usize, theme: &Theme) -> Span<'s
 
     Span::styled(bar, Style::default().fg(color))
 }
+
+/// Create a section header line for detail popups
+///
+/// Returns a Line with indentation and styled header text (highlighted, bold, underlined).
+/// Used in job detail popups and similar views.
+pub fn section_header(title: &str, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(theme.account_highlight)
+                .bold()
+                .underlined(),
+        ),
+    ])
+}
+
+/// Create a simple key-value detail row
+///
+/// Returns a Line with a bold label and plain value. For more complex rows with
+/// multiple styled values, construct the Line directly.
+///
+/// # Arguments
+/// * `label` - The label text (will be bolded), should include trailing padding
+/// * `value` - The value to display
+pub fn detail_row(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("  {}", label), Style::default().bold()),
+        Span::raw(value.to_string()),
+    ])
+}
+
