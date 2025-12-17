@@ -6,9 +6,10 @@
 
 use crate::models::{
     ClusterStatus, JobHistoryInfo, JobInfo, NodeInfo, PersonalSummary, SacctResponse,
-    SchedulerStats, SinfoResponse, SqueueResponse, SshareEntry, SshareResponse,
+    SchedulerStats, SinfoResponse, SlurmResponse, SqueueResponse, SshareEntry, SshareResponse,
 };
 use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -33,14 +34,6 @@ pub struct SlurmPathResult {
     pub resolution: PathResolution,
 }
 
-impl SlurmPathResult {
-    /// Returns true if using the fallback path (should warn user)
-    #[allow(dead_code)] // Kept for potential future use
-    #[must_use]
-    pub fn is_fallback(&self) -> bool {
-        self.resolution == PathResolution::Fallback
-    }
-}
 
 /// Find the directory containing Slurm binaries.
 ///
@@ -274,19 +267,11 @@ pub fn detect_slurm_version(slurm_bin_path: &Path) -> Result<SlurmVersion, Slurm
 #[derive(Debug, Clone)]
 pub enum JsonSupportResult {
     /// JSON is supported (Slurm 21.08+)
-    Supported(SlurmVersion),
+    Supported,
     /// Slurm version is too old for JSON support
     UnsupportedVersion(SlurmVersion),
     /// Could not detect Slurm version
     DetectionFailed(SlurmVersionError),
-}
-
-impl JsonSupportResult {
-    /// Returns true if JSON is supported
-    #[must_use]
-    pub fn is_supported(&self) -> bool {
-        matches!(self, JsonSupportResult::Supported(_))
-    }
 }
 
 /// Check if Slurm version supports JSON output
@@ -295,13 +280,11 @@ impl JsonSupportResult {
 /// - JSON supported (Slurm 21.08+)
 /// - Slurm too old for JSON
 /// - Version detection failed
-///
-/// Use `is_supported()` for a simple boolean check.
 pub fn check_slurm_json_support(slurm_bin_path: &Path) -> JsonSupportResult {
     match detect_slurm_version(slurm_bin_path) {
         Ok(version) => {
             if version.supports_json() {
-                JsonSupportResult::Supported(version)
+                JsonSupportResult::Supported
             } else {
                 JsonSupportResult::UnsupportedVersion(version)
             }
@@ -316,7 +299,7 @@ pub fn check_slurm_json_support(slurm_bin_path: &Path) -> JsonSupportResult {
 /// a simple boolean.
 pub fn check_slurm_json_support_with_warnings(slurm_bin_path: &Path) -> bool {
     match check_slurm_json_support(slurm_bin_path) {
-        JsonSupportResult::Supported(_) => true,
+        JsonSupportResult::Supported => true,
         JsonSupportResult::UnsupportedVersion(version) => {
             eprintln!(
                 "Warning: Slurm {} detected. JSON output requires Slurm 21.08 or later.",
@@ -357,13 +340,6 @@ impl Default for SlurmInterface {
 }
 
 impl SlurmInterface {
-    /// Create a new SlurmInterface with default settings
-    #[allow(dead_code)] // Kept for backward compatibility
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a new SlurmInterface using configuration.
     ///
     /// If the config specifies a slurm_bin_path, use it; otherwise auto-detect.
@@ -392,13 +368,42 @@ impl SlurmInterface {
         )
     }
 
-    /// Check if the fallback path is unverified (sinfo not found at /usr/bin)
+    /// Execute a Slurm command and parse the JSON response.
     ///
-    /// Returns true if Slurm binaries were not found at the fallback path,
-    /// indicating that commands will likely fail.
-    #[must_use]
-    pub fn is_unverified_fallback(&self) -> bool {
-        self.resolution == PathResolution::FallbackUnverified
+    /// This is a generic helper that handles the common pattern of:
+    /// 1. Executing a pre-built Command
+    /// 2. Checking for successful execution
+    /// 3. Parsing the JSON output
+    /// 4. Checking for errors in the Slurm response
+    ///
+    /// # Arguments
+    /// * `cmd` - A pre-built Command (with all arguments already added)
+    /// * `error_context` - A human-readable description of the command (e.g., "sinfo", "squeue")
+    ///
+    /// # Type Parameters
+    /// * `T` - The response type to deserialize into. Must implement `DeserializeOwned` and `SlurmResponse`.
+    fn execute_slurm_command<T>(&self, mut cmd: Command, error_context: &str) -> Result<T>
+    where
+        T: DeserializeOwned + SlurmResponse,
+    {
+        let output = cmd
+            .output()
+            .with_context(|| format!("Failed to execute {} command", error_context))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("{} command failed: {}", error_context, stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let response: T = serde_json::from_str(&stdout)
+            .with_context(|| format!("Failed to parse {} JSON output", error_context))?;
+
+        if !response.errors().is_empty() {
+            anyhow::bail!("{} errors: {}", error_context, response.errors().join("; "));
+        }
+
+        Ok(response)
     }
 
     /// Get node information from sinfo command
@@ -438,20 +443,7 @@ impl SlurmInterface {
             cmd.arg("--states").arg(states.join(","));
         }
 
-        let output = cmd.output().context("Failed to execute sinfo command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("sinfo command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SinfoResponse =
-            serde_json::from_str(&stdout).context("Failed to parse sinfo JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("sinfo errors: {}", response.errors.join("; "));
-        }
+        let response: SinfoResponse = self.execute_slurm_command(cmd, "sinfo")?;
 
         Ok(response
             .sinfo
@@ -506,20 +498,7 @@ impl SlurmInterface {
             cmd.arg("-j").arg(ids.join(","));
         }
 
-        let output = cmd.output().context("Failed to execute squeue command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("squeue command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SqueueResponse =
-            serde_json::from_str(&stdout).context("Failed to parse squeue JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("squeue errors: {}", response.errors.join("; "));
-        }
+        let response: SqueueResponse = self.execute_slurm_command(cmd, "squeue")?;
 
         Ok(response
             .jobs
@@ -639,20 +618,7 @@ impl SlurmInterface {
             cmd.arg("-j").arg(ids.join(","));
         }
 
-        let output = cmd.output().context("Failed to execute sacct command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("sacct command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SacctResponse =
-            serde_json::from_str(&stdout).context("Failed to parse sacct JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("sacct errors: {}", response.errors.join("; "));
-        }
+        let response: SacctResponse = self.execute_slurm_command(cmd, "sacct")?;
 
         // Filter out job steps (keep only main job entries)
         // Job steps have IDs like "12345.0", "12345.batch", etc.
@@ -818,20 +784,7 @@ impl SlurmInterface {
             cmd.arg("-A").arg(account);
         }
 
-        let output = cmd.output().context("Failed to execute sshare command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("sshare command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SshareResponse =
-            serde_json::from_str(&stdout).context("Failed to parse sshare JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("sshare errors: {}", response.errors.join("; "));
-        }
+        let response: SshareResponse = self.execute_slurm_command(cmd, "sshare")?;
 
         Ok(response.shares.shares)
     }

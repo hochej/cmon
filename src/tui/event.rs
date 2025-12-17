@@ -13,7 +13,8 @@ pub enum InputEvent {
     Key(KeyEvent),
     /// Mouse input (optional feature)
     Mouse(MouseEvent),
-    /// Terminal resize
+    /// Terminal resize (constructed in runtime.rs, triggers re-render)
+    /// The width/height values are preserved for potential future use.
     #[allow(dead_code)]
     Resize(u16, u16),
 }
@@ -23,10 +24,7 @@ pub enum InputEvent {
 pub enum DataSource {
     Jobs,
     Nodes,
-    #[allow(dead_code)]
-    Partitions,
     Fairshare,
-    #[allow(dead_code)]
     SchedulerStats,
 }
 
@@ -35,7 +33,6 @@ impl std::fmt::Display for DataSource {
         match self {
             DataSource::Jobs => write!(f, "jobs"),
             DataSource::Nodes => write!(f, "nodes"),
-            DataSource::Partitions => write!(f, "partitions"),
             DataSource::Fairshare => write!(f, "fairshare"),
             DataSource::SchedulerStats => write!(f, "scheduler"),
         }
@@ -54,10 +51,6 @@ pub enum DataEvent {
     /// Nodes data updated
     NodesUpdated(Vec<crate::models::NodeInfo>),
 
-    /// Partitions data updated
-    #[allow(dead_code)]
-    PartitionsUpdated(Vec<crate::tui::app::PartitionStatus>),
-
     /// Fairshare data updated (Phase 4)
     FairshareUpdated(Vec<crate::models::SshareEntry>),
 
@@ -67,21 +60,8 @@ pub enum DataEvent {
     /// Fetch error from a data source
     FetchError { source: DataSource, error: String },
 
-    /// Force immediate refresh of all data
-    #[allow(dead_code)]
-    ForceRefresh,
-
-    /// Request shutdown
-    #[allow(dead_code)]
-    Shutdown,
-
     /// Job cancellation completed (success or failure)
-    JobCancelResult {
-        #[allow(dead_code)]
-        job_id: u64,
-        success: bool,
-        message: String,
-    },
+    JobCancelResult { success: bool, message: String },
 }
 
 /// Result of processing an event

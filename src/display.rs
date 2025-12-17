@@ -1,9 +1,13 @@
 //! Display and formatting functions for cluster information
 
+use crate::formatting::{
+    format_bytes, format_bytes_mb, truncate_path, truncate_string,
+};
 use crate::models::{
     ClusterStatus, JobHistoryInfo, JobInfo, NodeInfo, PersonalSummary, format_duration_seconds,
 };
 use crate::slurm::{shorten_node_list, shorten_node_name};
+use crate::utils::find_partition_key;
 use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use tabled::{
@@ -15,6 +19,35 @@ use tabled::{
 // Box Drawing Constants
 // ============================================================================
 // All boxes use 78-character visible width (80 total with borders)
+
+/// Type-safe color specification for box drawing.
+///
+/// Replaces stringly-typed color API (e.g., `"green"`) with compile-time checked
+/// enum variants, preventing typos and ensuring exhaustive matching.
+///
+/// Note: `Yellow` and `Blue` are provided for API completeness. Currently only
+/// `Green` and `Red` are used for colored boxes; the default `pad_line()` function
+/// uses `.blue()` directly for non-colored borders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Yellow and Blue kept for API completeness
+pub enum BoxColor {
+    Green,
+    Red,
+    Yellow,
+    Blue,
+}
+
+impl BoxColor {
+    /// Apply this color to the given text, returning a colored string.
+    fn apply(&self, text: &str) -> String {
+        match self {
+            BoxColor::Green => text.green().to_string(),
+            BoxColor::Red => text.red().to_string(),
+            BoxColor::Yellow => text.yellow().to_string(),
+            BoxColor::Blue => text.blue().to_string(),
+        }
+    }
+}
 
 /// Visible content width inside the box (excluding border characters)
 const BOX_WIDTH: usize = 78;
@@ -59,53 +92,39 @@ fn box_empty() -> &'static str {
 }
 
 /// Create a colored top border with title
-fn box_top_colored(title: &str, color: &str) -> String {
-    let top = box_top(title);
-    match color {
-        "green" => top.green().to_string(),
-        "red" => top.red().to_string(),
-        "yellow" => top.yellow().to_string(),
-        "blue" => top.blue().to_string(),
-        _ => top,
-    }
+fn box_top_colored(title: &str, color: BoxColor) -> String {
+    color.apply(&box_top(title))
 }
 
 /// Create a colored bottom border
-fn box_bottom_colored(color: &str) -> String {
-    match color {
-        "green" => box_chars::BOTTOM.green().to_string(),
-        "red" => box_chars::BOTTOM.red().to_string(),
-        "yellow" => box_chars::BOTTOM.yellow().to_string(),
-        "blue" => box_chars::BOTTOM.blue().to_string(),
-        _ => box_chars::BOTTOM.to_string(),
-    }
+fn box_bottom_colored(color: BoxColor) -> String {
+    color.apply(box_chars::BOTTOM)
 }
 
 /// Create a colored empty line
-fn box_empty_colored(color: &str) -> String {
-    match color {
-        "green" => box_chars::EMPTY.green().to_string(),
-        "red" => box_chars::EMPTY.red().to_string(),
-        "yellow" => box_chars::EMPTY.yellow().to_string(),
-        "blue" => box_chars::EMPTY.blue().to_string(),
-        _ => box_chars::EMPTY.to_string(),
-    }
+fn box_empty_colored(color: BoxColor) -> String {
+    color.apply(box_chars::EMPTY)
 }
 
-/// Format megabytes to human-readable size (input is in MB)
-pub fn format_bytes(mb: u64) -> String {
-    const KB: u64 = 1024;
-    const GB: u64 = KB;
-    const TB: u64 = GB * 1024;
-
-    if mb >= TB {
-        format!("{:.1}T", mb as f64 / TB as f64)
-    } else if mb >= GB {
-        format!("{:.1}G", mb as f64 / GB as f64)
-    } else {
-        format!("{}M", mb)
-    }
+/// Build a styled table with consistent formatting.
+///
+/// Applies the standard table style used throughout the CLI output:
+/// - Rounded borders
+/// - Word-preserving width wrapping
+/// - Centered headers
+///
+/// # Arguments
+/// * `rows` - Table rows implementing the `Tabled` trait
+/// * `max_width` - Maximum table width in characters (typically 200, or 120 for compact views)
+fn build_styled_table<T: Tabled>(rows: Vec<T>, max_width: usize) -> String {
+    let mut table = Table::new(rows);
+    table
+        .with(Style::rounded())
+        .with(Width::wrap(max_width).keep_words(true))
+        .with(Modify::new(Rows::first()).with(Alignment::center()));
+    table.to_string()
 }
+
 
 /// Format node state with colored indicator
 #[allow(clippy::if_same_then_else)]
@@ -187,7 +206,7 @@ pub fn format_memory_usage(node: &NodeInfo) -> String {
     let free = node.memory_free();
     let used = total.saturating_sub(free);
 
-    let usage = format!("{}/{}", format_bytes(used), format_bytes(total));
+    let usage = format!("{}/{}", format_bytes_mb(used), format_bytes_mb(total));
 
     let utilization = node.memory_utilization();
     if utilization < 10.0 {
@@ -283,13 +302,7 @@ pub fn format_nodes(nodes: &[NodeInfo], node_prefix_strip: &str) -> String {
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
 /// Table row for job display
@@ -407,13 +420,7 @@ pub fn format_jobs(jobs: &[JobInfo], show_all: bool, node_prefix_strip: &str) ->
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
 /// Format cluster status display
@@ -569,11 +576,7 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
 
     // Add configured partitions in order (case-insensitive match to actual partition names)
     for config_name in partition_order {
-        // Find the actual partition key that matches case-insensitively
-        if let Some(actual_name) = partitions
-            .keys()
-            .find(|k| k.eq_ignore_ascii_case(config_name))
-        {
+        if let Some(actual_name) = find_partition_key(partitions.keys(), config_name) {
             ordered_names.push(actual_name.clone());
         }
     }
@@ -581,9 +584,9 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
     // Add remaining partitions alphabetically (case-insensitive sort)
     let mut remaining: Vec<&String> = partitions
         .keys()
-        .filter(|k| !ordered_names.iter().any(|o| o.eq_ignore_ascii_case(k)))
+        .filter(|k| find_partition_key(ordered_names.iter(), k).is_none())
         .collect();
-    remaining.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    remaining.sort_by_key(|a| a.to_lowercase());
     for name in remaining {
         ordered_names.push(name.clone());
     }
@@ -627,32 +630,30 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
             "    Memory:  {}   {:.0}% ({}/{} GB)",
             mem_bar,
             mem_util,
-            format_bytes(allocated_mem),
-            format_bytes(total_mem)
+            format_bytes_mb(allocated_mem),
+            format_bytes_mb(total_mem)
         );
         output.push_str(&format!("{}\n", pad_line(&mem_line)));
 
         // GPU stats (shown only if partition has GPUs)
-        let total_gpus: u32 = nodes.iter().map(|n| n.gpu_info().total).sum();
-        if total_gpus > 0 {
-            let used_gpus: u32 = nodes.iter().map(|n| n.gpu_info().used).sum();
-            let gpu_util = if total_gpus > 0 {
-                (used_gpus as f64 / total_gpus as f64) * 100.0
-            } else {
-                0.0
-            };
-
-            let gpu_type = nodes
-                .iter()
-                .find_map(|n| {
-                    let info = n.gpu_info();
-                    if !info.gpu_type.is_empty() {
-                        Some(info.gpu_type.to_uppercase())
-                    } else {
+        // Collect all GPU info in a single pass to avoid calling gpu_info() multiple times per node
+        let (total_gpus, used_gpus, gpu_type) = nodes.iter().fold(
+            (0u32, 0u32, None::<String>),
+            |(total, used, gtype), node| {
+                let info = node.gpu_info();
+                let new_gtype = gtype.or_else(|| {
+                    if info.gpu_type.is_empty() {
                         None
+                    } else {
+                        Some(info.gpu_type.to_uppercase())
                     }
-                })
-                .unwrap_or_else(|| "GPU".to_string());
+                });
+                (total + info.total, used + info.used, new_gtype)
+            },
+        );
+        if total_gpus > 0 {
+            let gpu_util = (used_gpus as f64 / total_gpus as f64) * 100.0;
+            let gpu_type = gpu_type.unwrap_or_else(|| "GPU".to_string());
 
             let gpu_bar = create_bar(gpu_util);
             let gpu_line = format!(
@@ -898,208 +899,253 @@ fn format_job_history_brief(jobs: &[&JobHistoryInfo]) -> String {
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
-/// Format a single job's detailed information
-pub fn format_job_details(job: &JobHistoryInfo, node_prefix_strip: &str) -> String {
-    let mut output = String::new();
+// ============================================================================
+// Job Details Section Builders
+// ============================================================================
+// These helpers decompose format_job_details() into logical sections,
+// each returning padded lines ready to be joined into the final output.
 
-    // Header
-    output.push_str(&format!("\n{}\n", box_top(" Job Details ").blue()));
-    output.push_str(&format!("{}\n", box_empty().blue()));
-
-    // Basic Info
-    let job_id_line = format!("  {} {}", "Job ID:".bold(), job.job_id.to_string().cyan());
-    output.push_str(&format!("{}\n", pad_line(&job_id_line)));
-
-    let name_line = format!("  {} {}", "Name:".bold(), job.name);
-    output.push_str(&format!("{}\n", pad_line(&name_line)));
-
-    let state_display = format_history_state(job);
-    let state_line = format!("  {} {}", "State:".bold(), state_display);
-    output.push_str(&format!("{}\n", pad_line(&state_line)));
-
-    let user_line = format!("  {} {} ({})", "User:".bold(), job.user, job.account);
-    output.push_str(&format!("{}\n", pad_line(&user_line)));
-
-    let partition_line = format!(
-        "  {} {} (QoS: {})",
-        "Partition:".bold(),
-        job.partition,
-        job.qos
-    );
-    output.push_str(&format!("{}\n", pad_line(&partition_line)));
+/// Build the basic info section (Job ID, Name, State, User, Partition, Nodes)
+fn build_job_basic_info(job: &JobHistoryInfo, node_prefix_strip: &str) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {} {}", "Job ID:".bold(), job.job_id.to_string().cyan())),
+        pad_line(&format!("  {} {}", "Name:".bold(), job.name)),
+        pad_line(&format!("  {} {}", "State:".bold(), format_history_state(job))),
+        pad_line(&format!("  {} {} ({})", "User:".bold(), job.user, job.account)),
+        pad_line(&format!(
+            "  {} {} (QoS: {})",
+            "Partition:".bold(),
+            job.partition,
+            job.qos
+        )),
+    ];
 
     if !job.nodes.is_empty() && job.nodes != "None assigned" {
-        let nodes_line = format!(
+        lines.push(pad_line(&format!(
             "  {} {}",
             "Nodes:".bold(),
             shorten_node_list(&job.nodes, node_prefix_strip)
-        );
-        output.push_str(&format!("{}\n", pad_line(&nodes_line)));
+        )));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Time Information
-    let time_header = format!("  {}", "Time Information".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&time_header)));
-
-    let submit_line = format!("    Submitted:  {}", job.submit_time_display());
-    output.push_str(&format!("{}\n", pad_line(&submit_line)));
+/// Build the time information section (Submit, Start, End, Elapsed, Wait Time)
+fn build_job_time_info(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Time Information".bold().underline())),
+        pad_line(&format!("    Submitted:  {}", job.submit_time_display())),
+    ];
 
     if job.time.start > 0 {
-        let start_line = format!("    Started:    {}", job.start_time_display());
-        output.push_str(&format!("{}\n", pad_line(&start_line)));
+        lines.push(pad_line(&format!("    Started:    {}", job.start_time_display())));
     }
 
     if job.time.end > 0 {
-        let end_line = format!("    Ended:      {}", job.end_time_display());
-        output.push_str(&format!("{}\n", pad_line(&end_line)));
+        lines.push(pad_line(&format!("    Ended:      {}", job.end_time_display())));
     }
 
-    let elapsed_line = format!(
+    lines.push(pad_line(&format!(
         "    Elapsed:    {} / {}",
         job.elapsed_display(),
         job.time_limit_display()
-    );
-    output.push_str(&format!("{}\n", pad_line(&elapsed_line)));
+    )));
 
     if let Some(wait) = job.wait_time() {
-        let wait_line = format!("    Wait Time:  {}", format_duration_seconds(wait));
-        output.push_str(&format!("{}\n", pad_line(&wait_line)));
+        lines.push(pad_line(&format!("    Wait Time:  {}", format_duration_seconds(wait))));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Resource Allocation
-    let resource_header = format!("  {}", "Resource Allocation".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&resource_header)));
-
-    let cpu_line = format!("    CPUs:       {}", job.required.cpus);
-    output.push_str(&format!("{}\n", pad_line(&cpu_line)));
+/// Build the resource allocation section (CPUs, Memory, GPUs)
+fn build_job_resources(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Resource Allocation".bold().underline())),
+        pad_line(&format!("    CPUs:       {}", job.required.cpus)),
+    ];
 
     let requested_mem = job.requested_memory();
     if requested_mem > 0 {
-        let mem_line = format!("    Memory:     {}", format_bytes_from_bytes(requested_mem));
-        output.push_str(&format!("{}\n", pad_line(&mem_line)));
+        lines.push(pad_line(&format!("    Memory:     {}", format_bytes(requested_mem))));
     }
 
     let gpus = job.allocated_gpus();
     if gpus > 0 {
         let gpu_type = job.gpu_type().unwrap_or_else(|| "GPU".to_string());
-        let gpu_line = format!("    GPUs:       {}x {}", gpus, gpu_type);
-        output.push_str(&format!("{}\n", pad_line(&gpu_line)));
+        lines.push(pad_line(&format!("    GPUs:       {}x {}", gpus, gpu_type)));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Efficiency Metrics
-    let efficiency_header = format!("  {}", "Efficiency Metrics".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&efficiency_header)));
+/// Build the efficiency metrics section (CPU and Memory efficiency with bars)
+fn build_job_efficiency(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Efficiency Metrics".bold().underline())),
+    ];
 
-    // CPU Efficiency with bar
-    if let Some(cpu_eff) = job.cpu_efficiency() {
-        let bar = create_efficiency_bar(cpu_eff);
-        let cpu_eff_line = format!("    CPU:        {} {:.1}%", bar, cpu_eff);
-        output.push_str(&format!("{}\n", pad_line(&cpu_eff_line)));
+    // CPU Efficiency
+    let cpu_line = if let Some(cpu_eff) = job.cpu_efficiency() {
+        format!("    CPU:        {} {:.1}%", create_efficiency_bar(cpu_eff), cpu_eff)
     } else {
-        let cpu_eff_line = "    CPU:        (no data)".to_string();
-        output.push_str(&format!("{}\n", pad_line(&cpu_eff_line)));
-    }
+        "    CPU:        (no data)".to_string()
+    };
+    lines.push(pad_line(&cpu_line));
 
-    // Memory Efficiency with bar
+    // Memory Efficiency
+    let requested_mem = job.requested_memory();
     let max_mem = job.max_memory_used();
-    if max_mem > 0 && requested_mem > 0 {
+    let mem_line = if max_mem > 0 && requested_mem > 0 {
         if let Some(mem_eff) = job.memory_efficiency() {
-            let bar = create_efficiency_bar(mem_eff);
-            let mem_eff_line = format!(
+            format!(
                 "    Memory:     {} {:.1}% ({} / {})",
-                bar,
+                create_efficiency_bar(mem_eff),
                 mem_eff,
-                format_bytes_from_bytes(max_mem),
-                format_bytes_from_bytes(requested_mem)
-            );
-            output.push_str(&format!("{}\n", pad_line(&mem_eff_line)));
+                format_bytes(max_mem),
+                format_bytes(requested_mem)
+            )
+        } else {
+            "    Memory:     (no data)".to_string()
         }
     } else {
-        let mem_eff_line = "    Memory:     (no data)".to_string();
-        output.push_str(&format!("{}\n", pad_line(&mem_eff_line)));
+        "    Memory:     (no data)".to_string()
+    };
+    lines.push(pad_line(&mem_line));
+
+    lines
+}
+
+/// Build the exit information section (Exit Code, Signal) - only for completed jobs
+fn build_job_exit_info(job: &JobHistoryInfo) -> Option<Vec<String>> {
+    if job.is_running() || job.is_pending() {
+        return None;
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Exit Information".bold().underline())),
+    ];
 
-    // Exit Information
-    if !job.is_running() && !job.is_pending() {
-        let exit_header = format!("  {}", "Exit Information".bold().underline());
-        output.push_str(&format!("{}\n", pad_line(&exit_header)));
-
-        let exit_code_display = if let Some(code) = job.exit_code.return_code.value() {
-            if code == 0 {
-                "0 (Success)".green().to_string()
-            } else {
-                format!("{} (Error)", code).red().to_string()
-            }
+    let exit_code_display = if let Some(code) = job.exit_code.return_code.value() {
+        if code == 0 {
+            "0 (Success)".green().to_string()
         } else {
-            "-".white().to_string()
-        };
-        let exit_line = format!("    Exit Code:  {}", exit_code_display);
-        output.push_str(&format!("{}\n", pad_line(&exit_line)));
-
-        if !job.exit_code.signal.name.is_empty() {
-            let signal_line = format!("    Signal:     {}", job.exit_code.signal.name.red());
-            output.push_str(&format!("{}\n", pad_line(&signal_line)));
+            format!("{} (Error)", code).red().to_string()
         }
+    } else {
+        "-".white().to_string()
+    };
+    lines.push(pad_line(&format!("    Exit Code:  {}", exit_code_display)));
 
-        output.push_str(&format!("{}\n", box_empty().blue()));
+    if !job.exit_code.signal.name.is_empty() {
+        lines.push(pad_line(&format!("    Signal:     {}", job.exit_code.signal.name.red())));
     }
 
-    // Paths
-    let paths_header = format!("  {}", "Paths".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&paths_header)));
+    Some(lines)
+}
+
+/// Build the paths section (Work Dir, Stdout, Stderr)
+fn build_job_paths(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Paths".bold().underline())),
+    ];
 
     if !job.working_directory.is_empty() {
-        let wd_line = format!(
+        lines.push(pad_line(&format!(
             "    Work Dir:   {}",
             truncate_path(&job.working_directory, 50)
-        );
-        output.push_str(&format!("{}\n", pad_line(&wd_line)));
+        )));
     }
 
     if !job.stdout.is_empty() {
-        let stdout_line = format!("    Stdout:     {}", truncate_path(&job.stdout, 50));
-        output.push_str(&format!("{}\n", pad_line(&stdout_line)));
+        lines.push(pad_line(&format!("    Stdout:     {}", truncate_path(&job.stdout, 50))));
     }
 
     if !job.stderr.is_empty() && job.stderr != job.stdout {
-        let stderr_line = format!("    Stderr:     {}", truncate_path(&job.stderr, 50));
-        output.push_str(&format!("{}\n", pad_line(&stderr_line)));
+        lines.push(pad_line(&format!("    Stderr:     {}", truncate_path(&job.stderr, 50))));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Submit Line
-    if !job.submit_line.is_empty() {
-        let submit_header = format!("  {}", "Submit Command".bold().underline());
-        output.push_str(&format!("{}\n", pad_line(&submit_header)));
+/// Build the submit command section - only if submit_line is present
+fn build_job_submit_line(job: &JobHistoryInfo) -> Option<Vec<String>> {
+    if job.submit_line.is_empty() {
+        return None;
+    }
 
-        // Wrap long submit lines - 74 chars max (78 box width - 4 indent)
-        let submit_wrapped = wrap_text_smart(&job.submit_line, 72);
-        for line in submit_wrapped {
-            let submit_line = format!("    {}", line.bright_black());
-            output.push_str(&format!("{}\n", pad_line(&submit_line)));
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Submit Command".bold().underline())),
+    ];
+
+    // Wrap long submit lines - 72 chars max (78 box width - 4 indent - 2 borders)
+    for wrapped_line in wrap_text_smart(&job.submit_line, 72) {
+        lines.push(pad_line(&format!("    {}", wrapped_line.bright_black())));
+    }
+
+    Some(lines)
+}
+
+/// Format a single job's detailed information
+pub fn format_job_details(job: &JobHistoryInfo, node_prefix_strip: &str) -> String {
+    let mut output = String::new();
+    let empty_line = format!("{}\n", box_empty().blue());
+
+    // Header
+    output.push_str(&format!("\n{}\n", box_top(" Job Details ").blue()));
+    output.push_str(&empty_line);
+
+    // Basic Info
+    for line in build_job_basic_info(job, node_prefix_strip) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Time Information
+    for line in build_job_time_info(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Resource Allocation
+    for line in build_job_resources(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Efficiency Metrics
+    for line in build_job_efficiency(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Exit Information (conditional)
+    if let Some(exit_lines) = build_job_exit_info(job) {
+        for line in exit_lines {
+            output.push_str(&format!("{line}\n"));
         }
-
-        output.push_str(&format!("{}\n", box_empty().blue()));
+        output.push_str(&empty_line);
     }
 
+    // Paths
+    for line in build_job_paths(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Submit Command (conditional)
+    if let Some(submit_lines) = build_job_submit_line(job) {
+        for line in submit_lines {
+            output.push_str(&format!("{line}\n"));
+        }
+        output.push_str(&empty_line);
+    }
+
+    // Footer
     output.push_str(&format!("{}\n", box_bottom().blue()));
 
     output
@@ -1194,13 +1240,7 @@ pub fn format_job_history(jobs: &[JobHistoryInfo], show_efficiency: bool) -> Str
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
 /// Format history job state with coloring
@@ -1268,24 +1308,6 @@ fn create_efficiency_bar(efficiency: f64) -> String {
         format!("{}{}", filled_part.yellow(), empty_part.white())
     } else {
         format!("{}{}", filled_part.green(), empty_part.white())
-    }
-}
-
-/// Truncate a string to a maximum length
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
-    }
-}
-
-/// Truncate a path, keeping the end visible
-fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        path.to_string()
-    } else {
-        format!("...{}", &path[path.len().saturating_sub(max_len - 3)..])
     }
 }
 
@@ -1362,14 +1384,14 @@ fn find_break_point(s: &str, max_width: usize) -> usize {
 pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_strip: &str) -> String {
     if nodes.is_empty() {
         let mut output = String::new();
-        output.push_str(&format!("\n{}\n", box_top_colored(" Cluster Health ", "green")));
-        output.push_str(&format!("{}\n", box_empty_colored("green")));
+        output.push_str(&format!("\n{}\n", box_top_colored(" Cluster Health ", BoxColor::Green)));
+        output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Green)));
         output.push_str(&format!(
             "{}\n",
-            pad_line_colored("  All nodes are healthy! No issues detected.", "green")
+            pad_line_colored("  All nodes are healthy! No issues detected.", BoxColor::Green)
         ));
-        output.push_str(&format!("{}\n", box_empty_colored("green")));
-        output.push_str(&format!("{}\n", box_bottom_colored("green")));
+        output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Green)));
+        output.push_str(&format!("{}\n", box_bottom_colored(BoxColor::Green)));
         return output;
     }
 
@@ -1404,8 +1426,8 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
     }
 
     // Summary header
-    output.push_str(&format!("\n{}\n", box_top_colored(" Problem Nodes ", "red")));
-    output.push_str(&format!("{}\n", box_empty_colored("red")));
+    output.push_str(&format!("\n{}\n", box_top_colored(" Problem Nodes ", BoxColor::Red)));
+    output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Red)));
 
     // Summary counts
     let total_cpus: u32 = nodes.iter().map(|n| n.cpus.total).sum();
@@ -1421,13 +1443,13 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             String::new()
         }
     );
-    output.push_str(&format!("{}\n", pad_line_colored(&summary, "red")));
+    output.push_str(&format!("{}\n", pad_line_colored(&summary, BoxColor::Red)));
 
-    output.push_str(&format!("{}\n", box_empty_colored("red")));
+    output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Red)));
 
     // Breakdown by category
     let breakdown_header = format!("  {}", "Breakdown:".bold().underline());
-    output.push_str(&format!("{}\n", pad_line_colored(&breakdown_header, "red")));
+    output.push_str(&format!("{}\n", pad_line_colored(&breakdown_header, BoxColor::Red)));
 
     if !down_nodes.is_empty() {
         let down_cpus: u32 = down_nodes.iter().map(|n| n.cpus.total).sum();
@@ -1437,7 +1459,7 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             down_nodes.len().to_string().red(),
             down_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&down_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&down_line, BoxColor::Red)));
     }
 
     if !drain_nodes.is_empty() {
@@ -1448,7 +1470,7 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             drain_nodes.len().to_string().yellow(),
             drain_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&drain_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&drain_line, BoxColor::Red)));
     }
 
     if !maint_nodes.is_empty() {
@@ -1459,7 +1481,7 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             maint_nodes.len().to_string().cyan(),
             maint_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&maint_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&maint_line, BoxColor::Red)));
     }
 
     if show_all && !other_nodes.is_empty() {
@@ -1470,11 +1492,11 @@ pub fn format_problem_nodes(nodes: &[NodeInfo], show_all: bool, node_prefix_stri
             other_nodes.len().to_string().bright_black(),
             other_cpus
         );
-        output.push_str(&format!("{}\n", pad_line_colored(&other_line, "red")));
+        output.push_str(&format!("{}\n", pad_line_colored(&other_line, BoxColor::Red)));
     }
 
-    output.push_str(&format!("{}\n", box_empty_colored("red")));
-    output.push_str(&format!("{}\n", box_bottom_colored("red")));
+    output.push_str(&format!("{}\n", box_empty_colored(BoxColor::Red)));
+    output.push_str(&format!("{}\n", box_bottom_colored(BoxColor::Red)));
 
     // Detailed table
     output.push('\n');
@@ -1555,17 +1577,11 @@ fn format_problem_nodes_table(nodes: &[NodeInfo], node_prefix_strip: &str) -> St
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(120).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 120)
 }
 
 /// Pad line with colored borders
-fn pad_line_colored(content: &str, color: &str) -> String {
+fn pad_line_colored(content: &str, color: BoxColor) -> String {
     let visible_len = strip_ansi(content).chars().count();
     let padding = if visible_len < BOX_WIDTH {
         " ".repeat(BOX_WIDTH - visible_len)
@@ -1573,49 +1589,13 @@ fn pad_line_colored(content: &str, color: &str) -> String {
         String::new()
     };
 
-    match color {
-        "green" => format!(
-            "{}{}{}{}",
-            box_chars::LEFT.green(),
-            content,
-            padding,
-            box_chars::RIGHT.green()
-        ),
-        "red" => format!(
-            "{}{}{}{}",
-            box_chars::LEFT.red(),
-            content,
-            padding,
-            box_chars::RIGHT.red()
-        ),
-        _ => format!(
-            "{}{}{}{}",
-            box_chars::LEFT.blue(),
-            content,
-            padding,
-            box_chars::RIGHT.blue()
-        ),
-    }
-}
-
-/// Format bytes from bytes (not MB) to human-readable
-fn format_bytes_from_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if bytes >= TB {
-        format!("{:.1}T", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.1}G", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1}M", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}K", bytes as f64 / KB as f64)
-    } else {
-        format!("{}B", bytes)
-    }
+    format!(
+        "{}{}{}{}",
+        color.apply(box_chars::LEFT),
+        content,
+        padding,
+        color.apply(box_chars::RIGHT)
+    )
 }
 
 #[cfg(test)]
@@ -1623,12 +1603,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(512), "512M");
-        assert_eq!(format_bytes(1024), "1.0G");
-        assert_eq!(format_bytes(1536), "1.5G");
-        assert_eq!(format_bytes(1048576), "1.0T");
-        assert_eq!(format_bytes(1572864), "1.5T");
+    fn test_format_bytes_mb() {
+        // Tests for format_bytes_mb (MB input -> human readable)
+        assert_eq!(format_bytes_mb(512), "512M");
+        assert_eq!(format_bytes_mb(1024), "1.0G");
+        assert_eq!(format_bytes_mb(1536), "1.5G");
+        assert_eq!(format_bytes_mb(1048576), "1.0T");
+        assert_eq!(format_bytes_mb(1572864), "1.5T");
     }
 
     #[test]

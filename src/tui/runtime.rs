@@ -343,7 +343,8 @@ async fn fetch_and_send_jobs(
     .await;
 
     handle_fetch_result(result, tx, throttle, DataSource::Jobs, |jobs| {
-        let tui_jobs: Vec<TuiJobInfo> = jobs.iter().map(TuiJobInfo::from_job_info).collect();
+        let tui_jobs: Vec<TuiJobInfo> =
+            jobs.iter().filter_map(TuiJobInfo::from_job_info).collect();
         DataEvent::JobsUpdated(tui_jobs)
     });
 }
@@ -482,33 +483,20 @@ async fn fetch_and_send_scheduler_stats(
     throttle: &FetcherThrottle,
 ) {
     let slurm_clone = slurm.clone();
-    let result = tokio::task::spawn_blocking(move || slurm_clone.get_scheduler_stats()).await;
+    // Wrap result in Ok() to match the handle_fetch_result signature
+    // Note: get_scheduler_stats() returns SchedulerStats directly (handles errors internally)
+    let result = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>(slurm_clone.get_scheduler_stats())
+    })
+    .await;
 
-    match result {
-        Ok(stats) => {
-            // Always send stats, even if unavailable (the UI handles this)
-            if tx
-                .try_send(DataEvent::SchedulerStatsUpdated(stats))
-                .is_err()
-            {
-                throttle.record_backpressure();
-                tracing::debug!("Could not send scheduler stats (channel full)");
-            }
-        }
-        Err(e) => {
-            // Task join error - scheduler stats are non-critical, but log for debugging
-            throttle.record_error();
-            if tx
-                .try_send(DataEvent::FetchError {
-                    source: DataSource::SchedulerStats,
-                    error: format!("Task join error: {}", e),
-                })
-                .is_err()
-            {
-                tracing::warn!("Could not send scheduler stats error notification (channel full)");
-            }
-        }
-    }
+    handle_fetch_result(
+        result,
+        tx,
+        throttle,
+        DataSource::SchedulerStats,
+        DataEvent::SchedulerStatsUpdated,
+    );
 }
 
 /// Spawn the animation tick task

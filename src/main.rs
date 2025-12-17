@@ -1,9 +1,11 @@
 //! cmon - Fast cluster monitoring tool for Slurm
 
 mod display;
+pub mod formatting;
 mod models;
 mod slurm;
 mod tui;
+mod utils;
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
@@ -224,29 +226,17 @@ fn main() -> Result<()> {
             state,
             watch,
         }) => {
-            if watch > 0.0 {
-                let prefix = node_prefix.clone();
-                watch_loop(watch, move || {
-                    handle_jobs_command(
-                        &slurm,
-                        all,
-                        user.as_deref(),
-                        partition.as_deref(),
-                        state.as_deref(),
-                        &prefix,
-                    )
-                })?;
-            } else {
-                let output = handle_jobs_command(
+            let prefix = node_prefix.clone();
+            run_with_optional_watch(watch, move || {
+                handle_jobs_command(
                     &slurm,
                     all,
                     user.as_deref(),
                     partition.as_deref(),
                     state.as_deref(),
-                    node_prefix,
-                )?;
-                println!("{}", output);
-            }
+                    &prefix,
+                )
+            })?;
         }
         Some(Commands::Nodes {
             partition,
@@ -255,87 +245,51 @@ fn main() -> Result<()> {
             state,
             watch,
         }) => {
-            if watch > 0.0 {
-                let prefix = node_prefix.clone();
-                watch_loop(watch, move || {
-                    handle_nodes_command(
-                        &slurm,
-                        partition.as_deref(),
-                        nodelist.as_deref(),
-                        all,
-                        state.as_deref(),
-                        &prefix,
-                    )
-                })?;
-            } else {
-                let output = handle_nodes_command(
+            let prefix = node_prefix.clone();
+            run_with_optional_watch(watch, move || {
+                handle_nodes_command(
                     &slurm,
                     partition.as_deref(),
                     nodelist.as_deref(),
                     all,
                     state.as_deref(),
-                    node_prefix,
-                )?;
-                println!("{}", output);
-            }
+                    &prefix,
+                )
+            })?;
         }
         Some(Commands::Status {
             partition,
             user,
             watch,
         }) => {
-            if watch > 0.0 {
-                let prefix = node_prefix.clone();
-                let order = partition_order.clone();
-                watch_loop(watch, move || {
-                    handle_status_command(
-                        &slurm,
-                        partition.as_deref(),
-                        user.as_deref(),
-                        &order,
-                        &prefix,
-                    )
-                })?;
-            } else {
-                let output = handle_status_command(
+            let prefix = node_prefix.clone();
+            let order = partition_order.clone();
+            run_with_optional_watch(watch, move || {
+                handle_status_command(
                     &slurm,
                     partition.as_deref(),
                     user.as_deref(),
-                    partition_order,
-                    node_prefix,
-                )?;
-                println!("{}", output);
-            }
+                    &order,
+                    &prefix,
+                )
+            })?;
         }
         Some(Commands::Partitions {
             partition,
             user,
             watch,
         }) => {
-            if watch > 0.0 {
-                let order = partition_order.clone();
-                watch_loop(watch, move || {
-                    handle_partitions_command(&slurm, partition.as_deref(), user.as_deref(), &order)
-                })?;
-            } else {
-                let output = handle_partitions_command(
-                    &slurm,
-                    partition.as_deref(),
-                    user.as_deref(),
-                    partition_order,
-                )?;
-                println!("{}", output);
-            }
+            let order = partition_order.clone();
+            run_with_optional_watch(watch, move || {
+                handle_partitions_command(&slurm, partition.as_deref(), user.as_deref(), &order)
+            })?;
         }
         Some(Commands::Me { watch }) => {
             let username = SlurmInterface::get_current_user();
-            if watch > 0.0 {
-                let prefix = node_prefix.clone();
-                watch_loop(watch, move || handle_me_command(&slurm, &username, &prefix))?;
-            } else {
-                let output = handle_me_command(&slurm, &username, node_prefix)?;
-                println!("{}", output);
-            }
+            let prefix = node_prefix.clone();
+            run_with_optional_watch(watch, move || {
+                handle_me_command(&slurm, &username, &prefix)
+            })?;
         }
         Some(Commands::Job { job_id }) => {
             let output = handle_job_command(&slurm, job_id, node_prefix)?;
@@ -363,15 +317,10 @@ fn main() -> Result<()> {
             all,
             watch,
         }) => {
-            if watch > 0.0 {
-                let prefix = node_prefix.clone();
-                watch_loop(watch, move || {
-                    handle_down_command(&slurm, partition.as_deref(), all, &prefix)
-                })?;
-            } else {
-                let output = handle_down_command(&slurm, partition.as_deref(), all, node_prefix)?;
-                println!("{}", output);
-            }
+            let prefix = node_prefix.clone();
+            run_with_optional_watch(watch, move || {
+                handle_down_command(&slurm, partition.as_deref(), all, &prefix)
+            })?;
         }
         Some(Commands::Tui) => {
             tui::run()?;
@@ -452,6 +401,22 @@ where
     println!("Watch mode stopped.");
 
     result
+}
+
+/// Execute a command once or in watch mode with optional interval.
+///
+/// If `watch` is > 0.0, runs the command repeatedly in a loop with flicker-free updates.
+/// Otherwise, runs the command once and prints the result.
+fn run_with_optional_watch<F>(watch: f64, render_fn: F) -> Result<()>
+where
+    F: Fn() -> Result<String>,
+{
+    if watch > 0.0 {
+        watch_loop(watch, render_fn)
+    } else {
+        println!("{}", render_fn()?);
+        Ok(())
+    }
 }
 
 /// Generate a template configuration file at ~/.config/cmon/config.toml
