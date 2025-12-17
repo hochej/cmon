@@ -7,17 +7,14 @@ use serde::{Deserialize, Serialize};
 
 /// TUI configuration
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct TuiConfig {
-    #[serde(default)]
     pub system: SystemConfig,
 
-    #[serde(default)]
     pub refresh: RefreshConfig,
 
-    #[serde(default)]
     pub display: DisplayConfig,
 
-    #[serde(default)]
     pub behavior: BehaviorConfig,
 }
 
