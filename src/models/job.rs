@@ -1,0 +1,869 @@
+//! Job information types for Slurm jobs.
+//!
+//! This module contains data structures for representing job information
+//! from Slurm's squeue and sacct commands, including current jobs and job history.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use super::time::TimeValue;
+use crate::formatting::{format_duration_human, format_duration_human_minutes};
+
+/// Job information from squeue
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct JobInfo {
+    pub job_id: u64,
+
+    #[serde(default)]
+    pub array_job_id: TimeValue,
+
+    pub name: String,
+    pub user_name: String,
+
+    #[serde(default)]
+    pub group_name: String,
+
+    pub account: String,
+    pub partition: String,
+
+    #[serde(rename = "job_state")]
+    pub state: Vec<String>,
+
+    #[serde(default)]
+    pub nodes: String,
+
+    #[serde(default)]
+    pub tres_alloc_str: String,
+
+    #[serde(default)]
+    pub cpus_per_task: TimeValue,
+
+    #[serde(default)]
+    pub tasks: TimeValue,
+
+    #[serde(default)]
+    pub start_time: TimeValue,
+
+    #[serde(default)]
+    pub end_time: TimeValue,
+
+    #[serde(default)]
+    pub time_limit: TimeValue,
+
+    #[serde(default)]
+    pub qos: String,
+
+    #[serde(default)]
+    pub flags: Vec<String>,
+
+    #[serde(default)]
+    pub batch_host: String,
+
+    #[serde(default)]
+    pub state_reason: String,
+
+    #[serde(default)]
+    pub priority: TimeValue,
+
+    #[serde(default)]
+    pub submit_time: TimeValue,
+
+    #[serde(default)]
+    pub current_working_directory: String,
+}
+
+impl JobInfo {
+    /// Check if job state contains any of the given states (without allocating)
+    fn has_state(&self, states: &[&str]) -> bool {
+        self.state
+            .iter()
+            .any(|s| states.iter().any(|state| s == *state))
+    }
+
+    // Base job states
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.has_state(&["RUNNING"])
+    }
+
+    #[must_use]
+    pub fn is_pending(&self) -> bool {
+        self.has_state(&["PENDING"])
+    }
+
+    #[must_use]
+    pub fn is_suspended(&self) -> bool {
+        self.has_state(&["SUSPENDED"])
+    }
+
+    #[must_use]
+    pub fn is_completed(&self) -> bool {
+        self.has_state(&["COMPLETED"])
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.has_state(&["CANCELLED"])
+    }
+
+    #[must_use]
+    pub fn is_failed(&self) -> bool {
+        self.has_state(&["FAILED"])
+    }
+
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        self.has_state(&["TIMEOUT"])
+    }
+
+    #[must_use]
+    pub fn is_node_fail(&self) -> bool {
+        self.has_state(&["NODE_FAIL"])
+    }
+
+    #[must_use]
+    pub fn is_preempted(&self) -> bool {
+        self.has_state(&["PREEMPTED"])
+    }
+
+    #[must_use]
+    pub fn is_boot_fail(&self) -> bool {
+        self.has_state(&["BOOT_FAIL"])
+    }
+
+    #[must_use]
+    pub fn is_deadline(&self) -> bool {
+        self.has_state(&["DEADLINE"])
+    }
+
+    #[must_use]
+    pub fn is_out_of_memory(&self) -> bool {
+        self.has_state(&["OUT_OF_MEMORY"])
+    }
+
+    // Job state flags
+    #[must_use]
+    pub fn is_completing(&self) -> bool {
+        self.has_state(&["COMPLETING"])
+    }
+
+    #[must_use]
+    pub fn is_configuring(&self) -> bool {
+        self.has_state(&["CONFIGURING"])
+    }
+
+    #[must_use]
+    pub fn is_requeued(&self) -> bool {
+        self.has_state(&["REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD"])
+    }
+
+    #[must_use]
+    pub fn is_resizing(&self) -> bool {
+        self.has_state(&["RESIZING"])
+    }
+
+    #[must_use]
+    pub fn is_signaling(&self) -> bool {
+        self.has_state(&["SIGNALING"])
+    }
+
+    #[must_use]
+    pub fn is_stage_out(&self) -> bool {
+        self.has_state(&["STAGE_OUT"])
+    }
+
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.has_state(&["STOPPED"])
+    }
+
+    /// Get the primary job state for display
+    #[must_use]
+    pub fn primary_state(&self) -> &str {
+        // Check flags first (they take precedence in display)
+        if self.is_completing() {
+            return "COMPLETING";
+        }
+        if self.is_configuring() {
+            return "CONFIGURING";
+        }
+        if self.is_stage_out() {
+            return "STAGE_OUT";
+        }
+        if self.is_signaling() {
+            return "SIGNALING";
+        }
+        if self.is_resizing() {
+            return "RESIZING";
+        }
+        if self.is_stopped() {
+            return "STOPPED";
+        }
+        if self.is_requeued() {
+            return "REQUEUED";
+        }
+
+        // Then check base states
+        if self.is_running() {
+            return "RUNNING";
+        }
+        if self.is_pending() {
+            return "PENDING";
+        }
+        if self.is_suspended() {
+            return "SUSPENDED";
+        }
+        if self.is_completed() {
+            return "COMPLETED";
+        }
+        if self.is_cancelled() {
+            return "CANCELLED";
+        }
+        if self.is_failed() {
+            return "FAILED";
+        }
+        if self.is_timeout() {
+            return "TIMEOUT";
+        }
+        if self.is_node_fail() {
+            return "NODE_FAIL";
+        }
+        if self.is_preempted() {
+            return "PREEMPTED";
+        }
+        if self.is_boot_fail() {
+            return "BOOT_FAIL";
+        }
+        if self.is_deadline() {
+            return "DEADLINE";
+        }
+        if self.is_out_of_memory() {
+            return "OUT_OF_MEMORY";
+        }
+
+        // Fallback to first state in array
+        self.state.first().map(|s| s.as_str()).unwrap_or("UNKNOWN")
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn is_array_job(&self) -> bool {
+        self.array_job_id.number() != 0
+    }
+
+    /// Parse allocated resources from TRES string
+    #[must_use]
+    pub fn allocated_resources(&self) -> HashMap<String, String> {
+        let mut resources = HashMap::new();
+
+        for item in self.tres_alloc_str.split(',') {
+            if let Some((key, value)) = item.split_once('=') {
+                resources.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+
+        resources
+    }
+
+    /// Get number of allocated GPUs
+    #[must_use]
+    pub fn allocated_gpus(&self) -> u32 {
+        self.allocated_resources()
+            .iter()
+            .filter(|(k, _)| k.contains("gres/gpu"))
+            .find_map(|(_, v)| v.parse::<u32>().ok())
+            .unwrap_or(0)
+    }
+
+    /// Parse GPU type information
+    #[must_use]
+    pub fn gpu_type_info(&self) -> JobGpuInfo {
+        // Look for specific GPU type allocations like "gres/gpu:l40s"
+        if let Some(info) = self
+            .allocated_resources()
+            .iter()
+            .filter(|(k, _)| k.contains("gres/gpu:"))
+            .find_map(|(k, v)| {
+                let gpu_type = k.split("gres/gpu:").nth(1)?;
+                let count = v.parse::<u32>().ok()?;
+                Some(JobGpuInfo {
+                    count,
+                    gpu_type: gpu_type.to_uppercase(),
+                    display: format!("{}x{}", count, gpu_type.to_uppercase()),
+                })
+            })
+        {
+            return info;
+        }
+
+        // Fallback to generic GPU count
+        let gpu_count = self.allocated_gpus();
+        if gpu_count > 0 {
+            return JobGpuInfo {
+                count: gpu_count,
+                gpu_type: String::new(),
+                display: gpu_count.to_string(),
+            };
+        }
+
+        JobGpuInfo {
+            count: 0,
+            gpu_type: String::new(),
+            display: "-".to_string(),
+        }
+    }
+
+    /// Calculate remaining time in minutes
+    #[must_use]
+    pub fn remaining_time_minutes(&self) -> Option<i64> {
+        let time_limit = self.time_limit.value()?;
+        let start_time = self.start_time.value()?;
+
+        let now = Utc::now().timestamp();
+        let elapsed = now - start_time as i64;
+        let elapsed_minutes = elapsed / 60;
+
+        let time_limit_minutes = time_limit as i64;
+        let remaining = time_limit_minutes - elapsed_minutes;
+
+        Some(remaining.max(0))
+    }
+
+    /// Format remaining time for display
+    #[must_use]
+    pub fn remaining_time_display(&self) -> String {
+        match self.remaining_time_minutes() {
+            None => "-".to_string(),
+            Some(0) => "0m".to_string(),
+            Some(remaining) if remaining < 60 => format!("{}m", remaining),
+            Some(remaining) if remaining < 1440 => {
+                let hours = remaining / 60;
+                let minutes = remaining % 60;
+                if minutes == 0 {
+                    format!("{}h", hours)
+                } else {
+                    format!("{}h {}m", hours, minutes)
+                }
+            }
+            Some(remaining) => {
+                let days = remaining / 1440;
+                let hours = (remaining % 1440) / 60;
+                if hours == 0 {
+                    format!("{}d", days)
+                } else {
+                    format!("{}d {}h", days, hours)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JobGpuInfo {
+    pub count: u32,
+    pub gpu_type: String,
+    pub display: String,
+}
+
+// ============================================================================
+// Job History Types (sacct)
+// ============================================================================
+
+/// Job history information from sacct
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct JobHistoryInfo {
+    pub job_id: u64,
+
+    #[serde(default)]
+    pub name: String,
+
+    #[serde(default)]
+    pub user: String,
+
+    #[serde(default)]
+    pub account: String,
+
+    #[serde(default)]
+    pub partition: String,
+
+    #[serde(default)]
+    pub state: JobHistoryState,
+
+    #[serde(default)]
+    pub exit_code: ExitCodeInfo,
+
+    #[serde(default)]
+    pub derived_exit_code: ExitCodeInfo,
+
+    #[serde(default)]
+    pub nodes: String,
+
+    #[serde(default)]
+    pub time: JobTimeInfo,
+
+    #[serde(default)]
+    pub required: JobRequiredResources,
+
+    #[serde(default)]
+    pub tres: JobTresInfo,
+
+    #[serde(default)]
+    pub steps: Vec<JobStepInfo>,
+
+    #[serde(default)]
+    pub submit_line: String,
+
+    #[serde(default)]
+    pub working_directory: String,
+
+    #[serde(default)]
+    pub stdout: String,
+
+    #[serde(default)]
+    pub stderr: String,
+
+    #[serde(default)]
+    pub group: String,
+
+    #[serde(default)]
+    pub cluster: String,
+
+    #[serde(default)]
+    pub qos: String,
+
+    #[serde(default)]
+    pub priority: TimeValue,
+
+    #[serde(default)]
+    pub association: JobAssociation,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobHistoryState {
+    #[serde(default)]
+    pub current: Vec<String>,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ExitCodeInfo {
+    #[serde(default)]
+    pub status: Vec<String>,
+    #[serde(default)]
+    pub return_code: TimeValue,
+    #[serde(default)]
+    pub signal: SignalInfo,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SignalInfo {
+    #[serde(default)]
+    pub id: TimeValue,
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobTimeInfo {
+    #[serde(default)]
+    pub elapsed: u64,
+    #[serde(default)]
+    pub eligible: u64,
+    #[serde(default)]
+    pub end: u64,
+    #[serde(default)]
+    pub start: u64,
+    #[serde(default)]
+    pub submission: u64,
+    #[serde(default)]
+    pub suspended: u64,
+    #[serde(default)]
+    pub limit: TimeValue,
+    #[serde(default)]
+    pub system: TimeSeconds,
+    #[serde(default)]
+    pub user: TimeSeconds,
+    #[serde(default)]
+    pub total: TimeSeconds,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct TimeSeconds {
+    #[serde(default)]
+    pub seconds: u64,
+    #[serde(default)]
+    pub microseconds: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobRequiredResources {
+    #[serde(rename = "CPUs")]
+    #[serde(default)]
+    pub cpus: u32,
+    #[serde(default)]
+    pub memory_per_cpu: TimeValue,
+    #[serde(default)]
+    pub memory_per_node: TimeValue,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobTresInfo {
+    #[serde(default)]
+    pub allocated: Vec<TresItem>,
+    #[serde(default)]
+    pub requested: Vec<TresItem>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct TresItem {
+    #[serde(default, rename = "type")]
+    pub tres_type: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub id: u32,
+    #[serde(default)]
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobStepInfo {
+    #[serde(default)]
+    pub time: JobStepTimeInfo,
+    #[serde(default)]
+    pub exit_code: ExitCodeInfo,
+    #[serde(default)]
+    pub statistics: Option<JobStepStatistics>,
+    #[serde(default)]
+    pub step: StepIdInfo,
+    #[serde(default)]
+    pub tasks: TasksInfo,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobStepTimeInfo {
+    #[serde(default)]
+    pub elapsed: u64,
+    #[serde(default)]
+    pub start: TimeValue,
+    #[serde(default)]
+    pub end: TimeValue,
+    #[serde(default)]
+    pub system: TimeSeconds,
+    #[serde(default)]
+    pub user: TimeSeconds,
+    #[serde(default)]
+    pub total: TimeSeconds,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobStepStatistics {
+    #[serde(rename = "CPU")]
+    #[serde(default)]
+    pub cpu: Option<CpuStatistics>,
+    #[serde(default)]
+    pub memory: Option<MemoryStatistics>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct CpuStatistics {
+    #[serde(default)]
+    pub actual_frequency: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct MemoryStatistics {
+    #[serde(default)]
+    pub max: MemoryMaxInfo,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct MemoryMaxInfo {
+    #[serde(default)]
+    pub task: MemoryTaskInfo,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct MemoryTaskInfo {
+    #[serde(default)]
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct StepIdInfo {
+    #[serde(default)]
+    pub id: StepId,
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum StepId {
+    #[default]
+    Unknown,
+    Number(u64),
+    Name(String),
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct TasksInfo {
+    #[serde(default)]
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct JobAssociation {
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub cluster: String,
+    #[serde(default)]
+    pub partition: String,
+    #[serde(default)]
+    pub user: String,
+}
+
+impl JobHistoryInfo {
+    /// Get primary state string
+    #[must_use]
+    pub fn primary_state(&self) -> &str {
+        self.state
+            .current
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("UNKNOWN")
+    }
+
+    /// Check if job completed successfully
+    #[must_use]
+    pub fn is_completed(&self) -> bool {
+        self.state.current.iter().any(|s| s == "COMPLETED")
+    }
+
+    /// Check if job failed
+    #[must_use]
+    pub fn is_failed(&self) -> bool {
+        self.state.current.iter().any(|s| s == "FAILED")
+    }
+
+    /// Check if job timed out
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        self.state.current.iter().any(|s| s == "TIMEOUT")
+    }
+
+    /// Check if job was cancelled
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.state
+            .current
+            .iter()
+            .any(|s| s == "CANCELLED" || s.starts_with("CANCELLED"))
+    }
+
+    /// Check if job ran out of memory
+    #[must_use]
+    pub fn is_out_of_memory(&self) -> bool {
+        self.state.current.iter().any(|s| s == "OUT_OF_MEMORY")
+    }
+
+    /// Check if job is running
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.state.current.iter().any(|s| s == "RUNNING")
+    }
+
+    /// Check if job is pending
+    #[must_use]
+    pub fn is_pending(&self) -> bool {
+        self.state.current.iter().any(|s| s == "PENDING")
+    }
+
+    /// Get elapsed time in human-readable format
+    #[must_use]
+    pub fn elapsed_display(&self) -> String {
+        format_duration_human(self.time.elapsed)
+    }
+
+    /// Get time limit in human-readable format
+    #[must_use]
+    pub fn time_limit_display(&self) -> String {
+        match &self.time.limit {
+            TimeValue::Value(n) => format_duration_human_minutes(*n),
+            TimeValue::Infinite => "UNLIMITED".to_string(),
+            TimeValue::NotSet => "-".to_string(),
+        }
+    }
+
+    /// Calculate CPU efficiency percentage
+    #[must_use]
+    pub fn cpu_efficiency(&self) -> Option<f64> {
+        let elapsed = self.time.elapsed;
+        let cpus = self.required.cpus;
+
+        if elapsed == 0 || cpus == 0 {
+            return None;
+        }
+
+        // Total CPU time available (wall time * CPUs)
+        let total_cpu_time = elapsed as f64 * cpus as f64;
+
+        // Actual CPU time used (user + system)
+        let used_cpu_time =
+            self.time.total.seconds as f64 + (self.time.total.microseconds as f64 / 1_000_000.0);
+
+        if total_cpu_time > 0.0 {
+            Some((used_cpu_time / total_cpu_time) * 100.0)
+        } else {
+            None
+        }
+    }
+
+    /// Get maximum memory used from steps
+    #[must_use]
+    pub fn max_memory_used(&self) -> u64 {
+        self.steps
+            .iter()
+            .filter_map(|step| step.statistics.as_ref())
+            .filter_map(|stats| stats.memory.as_ref())
+            .map(|mem| mem.max.task.bytes)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Get requested memory in bytes
+    #[must_use]
+    pub fn requested_memory(&self) -> u64 {
+        // Memory per node takes precedence
+        if let Some(mem) = self.required.memory_per_node.value() {
+            if mem > 0 {
+                // Memory is in MB
+                return mem * 1024 * 1024;
+            }
+        }
+
+        // Fall back to memory per CPU * CPUs
+        if let Some(mem) = self.required.memory_per_cpu.value() {
+            if mem > 0 {
+                return mem * self.required.cpus as u64 * 1024 * 1024;
+            }
+        }
+
+        // Try to get from TRES
+        for tres in &self.tres.requested {
+            if tres.tres_type == "mem" {
+                return tres.count * 1024 * 1024; // Assuming MB
+            }
+        }
+
+        0
+    }
+
+    /// Calculate memory efficiency percentage
+    #[must_use]
+    pub fn memory_efficiency(&self) -> Option<f64> {
+        let max_used = self.max_memory_used();
+        let requested = self.requested_memory();
+
+        if requested > 0 && max_used > 0 {
+            Some((max_used as f64 / requested as f64) * 100.0)
+        } else {
+            None
+        }
+    }
+
+    /// Get number of allocated GPUs
+    #[must_use]
+    pub fn allocated_gpus(&self) -> u32 {
+        for tres in &self.tres.allocated {
+            if tres.tres_type == "gres" && tres.name.starts_with("gpu") {
+                return tres.count as u32;
+            }
+        }
+        0
+    }
+
+    /// Get GPU type
+    #[must_use]
+    pub fn gpu_type(&self) -> Option<String> {
+        for tres in &self.tres.allocated {
+            if tres.tres_type == "gres"
+                && tres.name.contains(':')
+                && let Some(gpu_type) = tres.name.split(':').nth(1)
+            {
+                return Some(gpu_type.to_uppercase());
+            }
+        }
+        None
+    }
+
+    /// Get exit code as string
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn exit_code_display(&self) -> String {
+        if let Some(code) = self.exit_code.return_code.value() {
+            format!("{}", code)
+        } else if !self.exit_code.signal.name.is_empty() {
+            format!("SIG{}", self.exit_code.signal.name)
+        } else {
+            "-".to_string()
+        }
+    }
+
+    /// Get submit time as formatted string
+    #[must_use]
+    pub fn submit_time_display(&self) -> String {
+        if self.time.submission > 0
+            && let Some(dt) = DateTime::from_timestamp(self.time.submission as i64, 0)
+        {
+            return dt.format("%Y-%m-%d %H:%M:%S").to_string();
+        }
+        "-".to_string()
+    }
+
+    /// Get start time as formatted string
+    #[must_use]
+    pub fn start_time_display(&self) -> String {
+        if self.time.start > 0
+            && let Some(dt) = DateTime::from_timestamp(self.time.start as i64, 0)
+        {
+            return dt.format("%Y-%m-%d %H:%M:%S").to_string();
+        }
+        "-".to_string()
+    }
+
+    /// Get end time as formatted string
+    #[must_use]
+    pub fn end_time_display(&self) -> String {
+        if self.time.end > 0
+            && let Some(dt) = DateTime::from_timestamp(self.time.end as i64, 0)
+        {
+            return dt.format("%Y-%m-%d %H:%M:%S").to_string();
+        }
+        "-".to_string()
+    }
+
+    /// Get wait time (time between submission and start)
+    #[must_use]
+    pub fn wait_time(&self) -> Option<u64> {
+        if self.time.submission > 0
+            && self.time.start > 0
+            && self.time.start >= self.time.submission
+        {
+            Some(self.time.start - self.time.submission)
+        } else {
+            None
+        }
+    }
+
+    /// Get wait time display
+    #[must_use]
+    pub fn wait_time_display(&self) -> String {
+        self.wait_time()
+            .map(format_duration_human)
+            .unwrap_or_else(|| "-".to_string())
+    }
+}
