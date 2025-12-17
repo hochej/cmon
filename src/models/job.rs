@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::state::JOB_STATE_PRIORITY;
 use super::time::TimeValue;
 use crate::formatting::{format_duration_human, format_duration_human_minutes};
 
@@ -142,7 +143,24 @@ impl JobInfo {
         self.has_state(&["OUT_OF_MEMORY"])
     }
 
-    // Job state flags
+    // ========================================================================
+    // Job State Flags
+    // Based on official Slurm documentation:
+    // https://slurm.schedmd.com/job_state_codes.html
+    // ========================================================================
+
+    // Failure/error flags
+    #[must_use]
+    pub fn is_launch_failed(&self) -> bool {
+        self.has_state(&["LAUNCH_FAILED"])
+    }
+
+    #[must_use]
+    pub fn is_reconfig_fail(&self) -> bool {
+        self.has_state(&["RECONFIG_FAIL"])
+    }
+
+    // Transitional flags
     #[must_use]
     pub fn is_completing(&self) -> bool {
         self.has_state(&["COMPLETING"])
@@ -154,8 +172,46 @@ impl JobInfo {
     }
 
     #[must_use]
+    pub fn is_power_up_node(&self) -> bool {
+        self.has_state(&["POWER_UP_NODE"])
+    }
+
+    #[must_use]
+    pub fn is_stage_out(&self) -> bool {
+        self.has_state(&["STAGE_OUT"])
+    }
+
+    // Requeue-related flags
+    #[must_use]
     pub fn is_requeued(&self) -> bool {
-        self.has_state(&["REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD"])
+        self.has_state(&["REQUEUED"])
+    }
+
+    #[must_use]
+    pub fn is_requeue_fed(&self) -> bool {
+        self.has_state(&["REQUEUE_FED"])
+    }
+
+    #[must_use]
+    pub fn is_requeue_hold(&self) -> bool {
+        self.has_state(&["REQUEUE_HOLD"])
+    }
+
+    #[must_use]
+    pub fn is_special_exit(&self) -> bool {
+        self.has_state(&["SPECIAL_EXIT"])
+    }
+
+    // Hold flags
+    #[must_use]
+    pub fn is_resv_del_hold(&self) -> bool {
+        self.has_state(&["RESV_DEL_HOLD"])
+    }
+
+    // Operational flags
+    #[must_use]
+    pub fn is_expediting(&self) -> bool {
+        self.has_state(&["EXPEDITING"])
     }
 
     #[must_use]
@@ -169,79 +225,33 @@ impl JobInfo {
     }
 
     #[must_use]
-    pub fn is_stage_out(&self) -> bool {
-        self.has_state(&["STAGE_OUT"])
-    }
-
-    #[must_use]
     pub fn is_stopped(&self) -> bool {
         self.has_state(&["STOPPED"])
     }
 
-    /// Get the primary job state for display
+    #[must_use]
+    pub fn is_update_db(&self) -> bool {
+        self.has_state(&["UPDATE_DB"])
+    }
+
+    // Federation flag
+    #[must_use]
+    pub fn is_revoked(&self) -> bool {
+        self.has_state(&["REVOKED"])
+    }
+
+    /// Get the primary job state for display.
+    ///
+    /// Uses `JOB_STATE_PRIORITY` to determine which state to show when
+    /// multiple states are present. Returns the first matching state
+    /// in priority order, or falls back to the first state in the array.
     #[must_use]
     pub fn primary_state(&self) -> &str {
-        // Check flags first (they take precedence in display)
-        if self.is_completing() {
-            return "COMPLETING";
+        for (display, variants) in JOB_STATE_PRIORITY {
+            if self.has_state(variants) {
+                return display;
+            }
         }
-        if self.is_configuring() {
-            return "CONFIGURING";
-        }
-        if self.is_stage_out() {
-            return "STAGE_OUT";
-        }
-        if self.is_signaling() {
-            return "SIGNALING";
-        }
-        if self.is_resizing() {
-            return "RESIZING";
-        }
-        if self.is_stopped() {
-            return "STOPPED";
-        }
-        if self.is_requeued() {
-            return "REQUEUED";
-        }
-
-        // Then check base states
-        if self.is_running() {
-            return "RUNNING";
-        }
-        if self.is_pending() {
-            return "PENDING";
-        }
-        if self.is_suspended() {
-            return "SUSPENDED";
-        }
-        if self.is_completed() {
-            return "COMPLETED";
-        }
-        if self.is_cancelled() {
-            return "CANCELLED";
-        }
-        if self.is_failed() {
-            return "FAILED";
-        }
-        if self.is_timeout() {
-            return "TIMEOUT";
-        }
-        if self.is_node_fail() {
-            return "NODE_FAIL";
-        }
-        if self.is_preempted() {
-            return "PREEMPTED";
-        }
-        if self.is_boot_fail() {
-            return "BOOT_FAIL";
-        }
-        if self.is_deadline() {
-            return "DEADLINE";
-        }
-        if self.is_out_of_memory() {
-            return "OUT_OF_MEMORY";
-        }
-
         // Fallback to first state in array
         self.state.first().map(|s| s.as_str()).unwrap_or("UNKNOWN")
     }

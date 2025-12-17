@@ -240,7 +240,7 @@ pub mod thresholds {
 | `fairshare.rs` | SshareEntry, FairshareNode, tree building | ~200 |
 | `scheduler.rs` | SchedulerStats, sdiag parsing | ~150 |
 
-### 2.2 Refactor `primary_state()` with Const Arrays
+### 2.2 Refactor `primary_state()` with Const Arrays [DONE]
 
 ```rust
 // In models/state.rs

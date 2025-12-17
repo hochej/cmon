@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::state::NODE_STATE_PRIORITY;
 use super::time::TimeValue;
 
 /// Node information from sinfo
@@ -295,97 +296,18 @@ impl NodeInfo {
         self.has_state(&["BLOCKED"])
     }
 
-    /// Get the primary node state for display
+    /// Get the primary node state for display.
+    ///
+    /// Uses `NODE_STATE_PRIORITY` to determine which state to show when
+    /// multiple states are present. Returns the first matching state
+    /// in priority order, or falls back to the first state in the array.
     #[must_use]
     pub fn primary_state(&self) -> &str {
-        // Priority order: show most critical state first
-
-        // Critical states
-        if self.is_down() {
-            return "DOWN";
+        for (display, variants) in NODE_STATE_PRIORITY {
+            if self.has_state(variants) {
+                return display;
+            }
         }
-        if self.is_fail() {
-            return "FAIL";
-        }
-        if self.is_failing() {
-            return "FAILING";
-        }
-        if self.is_inval() {
-            return "INVAL";
-        }
-
-        // Maintenance/administrative states
-        if self.is_drained() {
-            return "DRAINED";
-        }
-        if self.is_draining() {
-            return "DRAINING";
-        }
-        if self.is_maint() {
-            return "MAINT";
-        }
-        if self.is_reserved() {
-            return "RESERVED";
-        }
-
-        // Reboot states
-        if self.is_reboot_issued() {
-            return "REBOOT_ISSUED";
-        }
-        if self.is_reboot_requested() {
-            return "REBOOT_REQUESTED";
-        }
-
-        // Power states
-        if self.is_powered_down() {
-            return "POWERED_DOWN";
-        }
-        if self.is_powering_down() {
-            return "POWERING_DOWN";
-        }
-        if self.is_powering_up() {
-            return "POWERING_UP";
-        }
-        if self.is_power_down() {
-            return "POWER_DOWN";
-        }
-
-        // Transitional states
-        if self.is_completing() {
-            return "COMPLETING";
-        }
-        if self.is_blocked() {
-            return "BLOCKED";
-        }
-
-        // Operational states
-        if self.is_allocated() {
-            return "ALLOCATED";
-        }
-        if self.is_mixed() {
-            return "MIXED";
-        }
-        if self.is_idle() {
-            return "IDLE";
-        }
-
-        // Special states
-        if self.is_perfctrs() {
-            return "PERFCTRS";
-        }
-        if self.is_planned() {
-            return "PLANNED";
-        }
-        if self.is_future() {
-            return "FUTURE";
-        }
-        if self.is_cloud() {
-            return "CLOUD";
-        }
-        if self.is_unknown() {
-            return "UNKNOWN";
-        }
-
         // Fallback
         self.node_state
             .state
