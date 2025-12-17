@@ -23,10 +23,10 @@ pub struct TuiConfig {
 
 /// System configuration for paths and environment
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct SystemConfig {
     /// Path to directory containing Slurm binaries (sinfo, squeue, etc.)
     /// If empty or not set, auto-detected via PATH
-    #[serde(default)]
     pub slurm_bin_path: Option<std::path::PathBuf>,
 }
 

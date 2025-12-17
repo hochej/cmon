@@ -32,18 +32,17 @@
  - Remove all field-level #[serde(default)] and #[serde(default = "fn")] attributes
  - Fix bug: change default_job_name_max_length() to literal 35 in impl Default
 
- Step 3: Refactor BehaviorConfig
+ Step 3: Refactor BehaviorConfig [DONE]
 
  - Add #[serde(default)] at struct level
  - Remove #[serde(default = "default_true")] from both fields
  - Keep existing impl Default
 
- Step 4: Refactor SystemConfig
+ Step 4: Refactor SystemConfig [DONE]
 
- - Remove Default from derive macro
+ - Keep #[derive(Default)] (clippy: derivable_impls - all fields use type-default)
  - Add #[serde(default)] at struct level
  - Remove field-level #[serde(default)]
- - Add manual impl Default with slurm_bin_path: None
 
  Step 5: Refactor TuiConfig
 
