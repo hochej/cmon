@@ -221,31 +221,6 @@ impl Default for BehaviorConfig {
     }
 }
 
-fn default_jobs_interval() -> u64 {
-    5
-}
-fn default_nodes_interval() -> u64 {
-    10
-}
-fn default_fairshare_interval() -> u64 {
-    60
-}
-fn default_idle_threshold() -> u64 {
-    30
-}
-fn default_true() -> bool {
-    true
-}
-fn default_view() -> String {
-    "jobs".to_string()
-}
-fn default_theme() -> String {
-    "dark".to_string()
-}
-fn default_job_name_max_length() -> usize {
-    35
-}
-
 impl TuiConfig {
     /// Get the user config file path, respecting XDG_CONFIG_HOME
     ///

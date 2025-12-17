@@ -50,7 +50,7 @@
  - Add #[serde(default)] at struct level
  - Remove all field-level #[serde(default)]
 
- Step 6: Delete All default_* Functions
+ Step 6: Delete All default_* Functions [DONE]
 
  Remove these 8 functions entirely:
  - default_jobs_interval()
