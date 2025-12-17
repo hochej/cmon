@@ -737,7 +737,10 @@ fn build_job_submit_line(job: &JobHistoryInfo) -> Option<Vec<String>>;  // condi
 
 **Savings:** ~50 lines (net) + improved maintainability and testability
 
-### 6.3 Create Generic Table Builder
+### 6.3 Create Generic Table Builder [DONE]
+
+Added `build_styled_table<T: Tabled>(rows: Vec<T>, max_width: usize)` helper function to
+consolidate the repeated table construction pattern across 5 functions in `display.rs`:
 
 ```rust
 fn build_styled_table<T: Tabled>(rows: Vec<T>, max_width: usize) -> String {
@@ -750,7 +753,14 @@ fn build_styled_table<T: Tabled>(rows: Vec<T>, max_width: usize) -> String {
 }
 ```
 
-**Savings:** ~25 lines
+**Refactored functions:**
+- `format_nodes()` (max_width: 200)
+- `format_jobs()` (max_width: 200)
+- `format_job_history_brief()` (max_width: 200)
+- `format_job_history()` (max_width: 200)
+- `format_problem_nodes_table()` (max_width: 120 - compact view)
+
+**Savings:** ~25 lines + single source of truth for table styling
 
 ---
 

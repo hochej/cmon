@@ -105,6 +105,25 @@ fn box_empty_colored(color: BoxColor) -> String {
     color.apply(box_chars::EMPTY)
 }
 
+/// Build a styled table with consistent formatting.
+///
+/// Applies the standard table style used throughout the CLI output:
+/// - Rounded borders
+/// - Word-preserving width wrapping
+/// - Centered headers
+///
+/// # Arguments
+/// * `rows` - Table rows implementing the `Tabled` trait
+/// * `max_width` - Maximum table width in characters (typically 200, or 120 for compact views)
+fn build_styled_table<T: Tabled>(rows: Vec<T>, max_width: usize) -> String {
+    let mut table = Table::new(rows);
+    table
+        .with(Style::rounded())
+        .with(Width::wrap(max_width).keep_words(true))
+        .with(Modify::new(Rows::first()).with(Alignment::center()));
+    table.to_string()
+}
+
 
 /// Format node state with colored indicator
 #[allow(clippy::if_same_then_else)]
@@ -282,13 +301,7 @@ pub fn format_nodes(nodes: &[NodeInfo], node_prefix_strip: &str) -> String {
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
 /// Table row for job display
@@ -406,13 +419,7 @@ pub fn format_jobs(jobs: &[JobInfo], show_all: bool, node_prefix_strip: &str) ->
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
 /// Format cluster status display
@@ -897,13 +904,7 @@ fn format_job_history_brief(jobs: &[&JobHistoryInfo]) -> String {
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
 // ============================================================================
@@ -1244,13 +1245,7 @@ pub fn format_job_history(jobs: &[JobHistoryInfo], show_efficiency: bool) -> Str
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(200).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 200)
 }
 
 /// Format history job state with coloring
@@ -1587,13 +1582,7 @@ fn format_problem_nodes_table(nodes: &[NodeInfo], node_prefix_strip: &str) -> St
         })
         .collect();
 
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Width::wrap(120).keep_words(true))
-        .with(Modify::new(Rows::first()).with(Alignment::center()));
-
-    table.to_string()
+    build_styled_table(rows, 120)
 }
 
 /// Pad line with colored borders
