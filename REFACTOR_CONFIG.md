@@ -26,7 +26,7 @@
  Before: Field-level #[serde(default = "default_jobs_interval")] etc.
  After: Add #[serde(default)] at struct level, remove all field-level attributes, keep existing impl Default
 
- Step 2: Refactor DisplayConfig
+ Step 2: Refactor DisplayConfig [DONE]
 
  - Add #[serde(default)] at struct level
  - Remove all field-level #[serde(default)] and #[serde(default = "fn")] attributes

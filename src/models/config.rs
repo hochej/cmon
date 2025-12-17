@@ -165,35 +165,29 @@ impl RefreshConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct DisplayConfig {
     /// Default view on startup
-    #[serde(default = "default_view")]
     pub default_view: String,
 
     /// Show all jobs by default
-    #[serde(default)]
     pub show_all_jobs: bool,
 
     /// Start with grouped-by-account mode
-    #[serde(default)]
     pub show_grouped_by_account: bool,
 
     /// Theme name
-    #[serde(default = "default_theme")]
     pub theme: String,
 
     /// Partition display order (empty = alphabetical)
     /// Example: ["cpu", "gpu", "fat", "vdi"]
-    #[serde(default)]
     pub partition_order: Vec<String>,
 
     /// Prefix to strip from node names for display (optional)
     /// Example: "demu4x" would turn "demu4xcpu01" into "cpu01"
-    #[serde(default)]
     pub node_prefix_strip: String,
 
     /// Maximum length for job names before truncation (default: 35)
-    #[serde(default = "default_job_name_max_length")]
     pub job_name_max_length: usize,
 }
 
@@ -206,7 +200,7 @@ impl Default for DisplayConfig {
             theme: "dark".to_string(),
             partition_order: Vec::new(),
             node_prefix_strip: String::new(),
-            job_name_max_length: default_job_name_max_length(),
+            job_name_max_length: 35,
         }
     }
 }
