@@ -605,13 +605,12 @@ pub fn section_header<'a>(title: &'a str, theme: &Theme) -> Line<'a>;
 pub fn detail_row<'a>(label: &'a str, value: impl Into<Span<'a>>) -> Line<'a>;
 ```
 
-### 5.3 Unify Problem Nodes Rendering
+### 5.3 Unify Problem Nodes Rendering [DONE]
 
-Merge `render_down_nodes_section()` and `render_draining_nodes_section()`:
+Merged `render_down_nodes_section()` and `render_draining_nodes_section()` into a single
+`render_problem_nodes_section()` function that uses the existing `ProblemsPanel` enum:
 
 ```rust
-enum ProblemNodeType { Down, Draining }
-
 fn render_problem_nodes_section(
     app: &App,
     nodes: &[&NodeInfo],
@@ -619,11 +618,17 @@ fn render_problem_nodes_section(
     area: Rect,
     theme: &Theme,
     focused: bool,
-    node_type: ProblemNodeType,
-) { ... }
+    panel: ProblemsPanel,  // Reuses existing enum instead of new ProblemNodeType
+) {
+    // Configuration derived from panel type via match:
+    // - title_prefix, empty_msg, unfocused_color, state_color, selected_idx
+}
 ```
 
-**Savings:** ~80 lines
+**Key decision:** Reused the existing `ProblemsPanel` enum from `state.rs` instead of
+creating a new `ProblemNodeType` enum, avoiding redundant type definitions.
+
+**Savings:** 54 lines (94 deletions, 40 insertions)
 
 ### 5.4 Unify Personal Jobs Panels
 

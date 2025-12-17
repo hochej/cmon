@@ -58,40 +58,74 @@ pub fn render_problems_view(app: &App, frame: &mut Frame, area: Rect, theme: &Th
 
     // Down nodes section
     let down_focused = app.problems_view.selected_panel == ProblemsPanel::Down;
-    render_down_nodes_section(app, &down_nodes, frame, chunks[0], theme, down_focused);
+    render_problem_nodes_section(
+        app,
+        &down_nodes,
+        frame,
+        chunks[0],
+        theme,
+        down_focused,
+        ProblemsPanel::Down,
+    );
 
     // Draining nodes section
     let draining_focused = app.problems_view.selected_panel == ProblemsPanel::Draining;
-    render_draining_nodes_section(
+    render_problem_nodes_section(
         app,
         &draining_nodes,
         frame,
         chunks[1],
         theme,
         draining_focused,
+        ProblemsPanel::Draining,
     );
 }
 
-fn render_down_nodes_section(
+/// Unified renderer for problem node sections (down or draining).
+///
+/// Uses the existing `ProblemsPanel` enum to determine configuration:
+/// - Title prefix and empty message
+/// - Border and state cell colors
+/// - Which selection state to use
+fn render_problem_nodes_section(
     app: &App,
     nodes: &[&NodeInfo],
     frame: &mut Frame,
     area: Rect,
     theme: &Theme,
     focused: bool,
+    panel: ProblemsPanel,
 ) {
-    // Highlight border if this panel is focused
+    // Derive panel-specific configuration
+    let (title_prefix, empty_msg, unfocused_color, state_color, selected_idx) = match panel {
+        ProblemsPanel::Down => (
+            "Down",
+            "No down nodes",
+            theme.failed,
+            theme.failed,
+            app.problems_view.down_nodes_state.selected,
+        ),
+        ProblemsPanel::Draining => (
+            "Draining",
+            "No draining nodes",
+            theme.timeout,
+            theme.timeout,
+            app.problems_view.draining_nodes_state.selected,
+        ),
+    };
+
     let border_color = if focused {
         theme.account_highlight
     } else {
-        theme.failed
+        unfocused_color
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(format!(
-            " Down Nodes ({}) {} ",
+            " {} Nodes ({}) {} ",
+            title_prefix,
             nodes.len(),
             if focused { "[Tab to switch]" } else { "" }
         ));
@@ -100,7 +134,7 @@ fn render_down_nodes_section(
     frame.render_widget(block, area);
 
     if nodes.is_empty() {
-        let para = Paragraph::new("No down nodes")
+        let para = Paragraph::new(empty_msg)
             .style(Style::default().fg(theme.border))
             .alignment(Alignment::Center);
         frame.render_widget(para, inner);
@@ -114,7 +148,6 @@ fn render_down_nodes_section(
         .style(Style::default().bg(theme.header_bg))
         .height(1);
 
-    let selected_idx = app.problems_view.down_nodes_state.selected;
     let available_height = inner.height.saturating_sub(1) as usize;
     let scroll_offset = calculate_scroll_offset(selected_idx, available_height, nodes.len());
 
@@ -134,97 +167,10 @@ fn render_down_nodes_section(
             let row = Row::new(vec![
                 Cell::from(shorten_node_name(node.name(), node_prefix).to_string()),
                 Cell::from(node.partition.name.as_deref().unwrap_or("")),
-                Cell::from(node.primary_state()).style(Style::default().fg(theme.failed)),
+                Cell::from(node.primary_state()).style(Style::default().fg(state_color)),
                 Cell::from(reason),
             ]);
 
-            // Highlight selected row if this panel is focused
-            if focused && idx == selected_idx {
-                row.style(Style::default().bg(theme.selected_bg))
-            } else {
-                row
-            }
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(15),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Min(15),
-    ];
-
-    let table = Table::new(rows, widths).header(header);
-    frame.render_widget(table, inner);
-}
-
-fn render_draining_nodes_section(
-    app: &App,
-    nodes: &[&NodeInfo],
-    frame: &mut Frame,
-    area: Rect,
-    theme: &Theme,
-    focused: bool,
-) {
-    // Highlight border if this panel is focused
-    let border_color = if focused {
-        theme.account_highlight
-    } else {
-        theme.timeout
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .title(format!(
-            " Draining Nodes ({}) {} ",
-            nodes.len(),
-            if focused { "[Tab to switch]" } else { "" }
-        ));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if nodes.is_empty() {
-        let para = Paragraph::new("No draining nodes")
-            .style(Style::default().fg(theme.border))
-            .alignment(Alignment::Center);
-        frame.render_widget(para, inner);
-        return;
-    }
-
-    let header_cells = ["Name", "Partition", "State", "Reason"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
-    let header = Row::new(header_cells)
-        .style(Style::default().bg(theme.header_bg))
-        .height(1);
-
-    let selected_idx = app.problems_view.draining_nodes_state.selected;
-    let available_height = inner.height.saturating_sub(1) as usize;
-    let scroll_offset = calculate_scroll_offset(selected_idx, available_height, nodes.len());
-
-    let node_prefix = &app.config.display.node_prefix_strip;
-    let rows: Vec<Row> = nodes
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(available_height)
-        .map(|(idx, node)| {
-            let reason = match &node.reason {
-                ReasonInfo::Empty => String::new(),
-                ReasonInfo::String(s) => truncate_string(s, 30),
-                ReasonInfo::Object { description } => truncate_string(description, 30),
-            };
-
-            let row = Row::new(vec![
-                Cell::from(shorten_node_name(node.name(), node_prefix).to_string()),
-                Cell::from(node.partition.name.as_deref().unwrap_or("")),
-                Cell::from(node.primary_state()).style(Style::default().fg(theme.timeout)),
-                Cell::from(reason),
-            ]);
-
-            // Highlight selected row if this panel is focused
             if focused && idx == selected_idx {
                 row.style(Style::default().bg(theme.selected_bg))
             } else {
