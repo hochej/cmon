@@ -27,12 +27,9 @@ impl ThemeName {
 /// Color theme for the TUI
 #[derive(Debug, Clone)]
 pub struct Theme {
-    #[allow(dead_code)]
     pub name: ThemeName,
 
     // Base colors
-    #[allow(dead_code)]
-    pub bg: Color,
     pub fg: Color,
     pub border: Color,
     pub border_focused: Color,
@@ -59,8 +56,6 @@ pub struct Theme {
 
     // Progress bars
     pub progress_full: Color,
-    #[allow(dead_code)]
-    pub progress_empty: Color,
     pub progress_warn: Color,
     pub progress_crit: Color,
 
@@ -80,7 +75,6 @@ impl Theme {
         Self {
             name: ThemeName::Dark,
 
-            bg: Color::Reset,
             fg: Color::White,
             border: Color::DarkGray,
             border_focused: Color::Cyan,
@@ -106,7 +100,6 @@ impl Theme {
             stale_indicator: Color::Rgb(255, 100, 100),
 
             progress_full: Color::Rgb(0, 200, 0),
-            progress_empty: Color::DarkGray,
             progress_warn: Color::Rgb(255, 180, 0),
             progress_crit: Color::Rgb(255, 80, 80),
 
@@ -120,7 +113,6 @@ impl Theme {
         Self {
             name: ThemeName::Light,
 
-            bg: Color::Reset,
             fg: Color::Black,
             border: Color::Rgb(120, 120, 120),
             border_focused: Color::Rgb(0, 100, 180),
@@ -146,7 +138,6 @@ impl Theme {
             stale_indicator: Color::Rgb(200, 0, 0),
 
             progress_full: Color::Rgb(0, 140, 0),
-            progress_empty: Color::Rgb(180, 180, 180),
             progress_warn: Color::Rgb(200, 120, 0),
             progress_crit: Color::Rgb(200, 0, 0),
 

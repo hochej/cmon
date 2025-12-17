@@ -431,13 +431,24 @@ where
 
 **Savings:** ~60 lines
 
-### 3.3 Remove Dead Code
+### 3.3 Remove Dead Code [DONE]
 
-Remove methods marked `#[allow(dead_code)]` that are "kept for potential future use":
-- Unused constructors
-- Unused type variants in `event.rs` and `theme.rs`
+Removed methods and types marked `#[allow(dead_code)]` that were "kept for potential future use":
 
-**Savings:** ~50 lines
+**event.rs:**
+- Removed `DataSource::Partitions` variant (never constructed as error source)
+- Removed `DataEvent::PartitionsUpdated`, `ForceRefresh`, `Shutdown` variants (never emitted)
+- Removed unused `job_id` field from `JobCancelResult`
+
+**theme.rs:**
+- Removed `bg` field (never used after construction)
+- Removed `progress_empty` field (never used)
+
+**slurm.rs:**
+- Removed `SlurmPathResult::is_fallback()` method
+- Removed `SlurmInterface::new()` constructor (redundant with `Default`)
+
+**Savings:** ~40 lines
 
 ---
 

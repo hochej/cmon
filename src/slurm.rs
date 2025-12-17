@@ -34,14 +34,6 @@ pub struct SlurmPathResult {
     pub resolution: PathResolution,
 }
 
-impl SlurmPathResult {
-    /// Returns true if using the fallback path (should warn user)
-    #[allow(dead_code)] // Kept for potential future use
-    #[must_use]
-    pub fn is_fallback(&self) -> bool {
-        self.resolution == PathResolution::Fallback
-    }
-}
 
 /// Find the directory containing Slurm binaries.
 ///
@@ -358,13 +350,6 @@ impl Default for SlurmInterface {
 }
 
 impl SlurmInterface {
-    /// Create a new SlurmInterface with default settings
-    #[allow(dead_code)] // Kept for backward compatibility
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a new SlurmInterface using configuration.
     ///
     /// If the config specifies a slurm_bin_path, use it; otherwise auto-detect.

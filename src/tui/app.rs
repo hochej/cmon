@@ -1628,7 +1628,6 @@ impl App {
             };
 
             let _ = data_tx.send(DataEvent::JobCancelResult {
-                job_id,
                 success,
                 message,
             }).await;
@@ -1754,11 +1753,6 @@ impl App {
                 self.nodes_view.list_state.clamp(self.data.nodes.len());
                 EventResult::Continue
             }
-            DataEvent::PartitionsUpdated(partitions) => {
-                self.data.partitions.update(partitions);
-                self.partitions_view.list_state.clamp(self.data.partitions.len());
-                EventResult::Continue
-            }
             DataEvent::FairshareUpdated(entries) => {
                 self.data.fairshare.update(entries);
                 // Build the flattened tree for display
@@ -1783,16 +1777,7 @@ impl App {
                     EventResult::Unchanged
                 }
             }
-            DataEvent::ForceRefresh => EventResult::Continue,
-            DataEvent::Shutdown => {
-                self.running = false;
-                EventResult::Quit
-            }
-            DataEvent::JobCancelResult {
-                job_id: _,
-                success,
-                message,
-            } => {
+            DataEvent::JobCancelResult { success, message } => {
                 if success {
                     self.feedback.set_clipboard_feedback(ClipboardFeedback::success(message));
                 } else {
