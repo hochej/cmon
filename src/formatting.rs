@@ -27,7 +27,9 @@ pub mod thresholds {
     pub const UTILIZATION_HIGH: f64 = 80.0;
 }
 
-/// Truncate a string to a maximum length, adding "..." at the end if truncated.
+/// Truncate a string to a maximum length (in characters), adding "..." at the end if truncated.
+///
+/// This function is Unicode-safe and counts characters, not bytes.
 ///
 /// # Examples
 /// ```
@@ -38,19 +40,22 @@ pub mod thresholds {
 /// ```
 #[must_use]
 pub fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         s.to_string()
     } else if max_len <= 3 {
         // Edge case: if max_len is very small, just truncate without ellipsis
-        s[..max_len].to_string()
+        s.chars().take(max_len).collect()
     } else {
-        format!("{}...", &s[..max_len - 3])
+        let truncated: String = s.chars().take(max_len - 3).collect();
+        format!("{}...", truncated)
     }
 }
 
 /// Truncate a path, keeping the end visible (opposite of truncate_string).
 ///
 /// Useful for file paths where the filename is more important than the directory prefix.
+/// This function is Unicode-safe and counts characters, not bytes.
 ///
 /// # Examples
 /// ```
@@ -60,12 +65,14 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
 /// ```
 #[must_use]
 pub fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
+    let char_count = path.chars().count();
+    if char_count <= max_len {
         path.to_string()
     } else if max_len <= 3 {
-        path[path.len().saturating_sub(max_len)..].to_string()
+        path.chars().skip(char_count.saturating_sub(max_len)).collect()
     } else {
-        format!("...{}", &path[path.len().saturating_sub(max_len - 3)..])
+        let suffix: String = path.chars().skip(char_count.saturating_sub(max_len - 3)).collect();
+        format!("...{}", suffix)
     }
 }
 
@@ -215,11 +222,56 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_string_unicode() {
+        // Chinese characters (3 bytes each in UTF-8)
+        // "\u{4e2d}\u{6587}" is 2 characters but 6 bytes
+        let chinese = "\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}"; // 4 chars, 12 bytes
+        assert_eq!(truncate_string(chinese, 10), chinese); // no truncation
+        assert_eq!(truncate_string(chinese, 4), chinese); // exact fit
+        assert_eq!(truncate_string(chinese, 3), "\u{4e2d}\u{6587}\u{6d4b}"); // max_len <= 3, no ellipsis
+
+        // Truncation with ellipsis
+        let long_chinese = "\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}\u{5b57}\u{7b26}"; // 6 chars
+        assert_eq!(truncate_string(long_chinese, 5), "\u{4e2d}\u{6587}..."); // 2 chars + "..."
+
+        // Mixed ASCII and multi-byte
+        let mixed = "ab\u{4e2d}cd"; // 5 chars: a, b, chinese, c, d
+        assert_eq!(truncate_string(mixed, 5), mixed);
+        assert_eq!(truncate_string(mixed, 4), "a..."); // truncate to 1 char + "..."
+
+        // Emoji (4 bytes each in UTF-8)
+        let emoji = "\u{1F600}\u{1F601}\u{1F602}"; // 3 emoji, 12 bytes
+        assert_eq!(truncate_string(emoji, 3), emoji);
+        assert_eq!(truncate_string(emoji, 2), "\u{1F600}\u{1F601}"); // max_len <= 3
+    }
+
+    #[test]
     fn test_truncate_path() {
         assert_eq!(truncate_path("/home/user/file.txt", 30), "/home/user/file.txt");
         assert_eq!(truncate_path("/very/long/path/file.txt", 12), ".../file.txt");
         assert_eq!(truncate_path("/a/b", 3), "a/b"); // edge case: max_len <= 3 shows last max_len chars
         assert_eq!(truncate_path("/abc/def", 7), ".../def"); // shows "..." + last 4 chars
+    }
+
+    #[test]
+    fn test_truncate_path_unicode() {
+        // Paths with Unicode characters should not panic
+        // Chinese directory name (3 bytes per char)
+        // "/home/\u{7528}\u{6237}/file.txt" is 17 chars total
+        let unicode_path = "/home/\u{7528}\u{6237}/file.txt";
+        assert_eq!(truncate_path(unicode_path, 25), unicode_path);
+
+        // Truncation keeps the end visible: max_len=15 means 12 chars + "..."
+        // Last 12 chars of the path: "/\u{7528}\u{6237}/file.txt"
+        assert_eq!(
+            truncate_path(unicode_path, 15),
+            ".../\u{7528}\u{6237}/file.txt"
+        );
+
+        // Very short max_len edge case
+        // "/\u{4e2d}/\u{6587}" is 4 chars: /, chinese, /, chinese
+        let short_unicode = "/\u{4e2d}/\u{6587}";
+        assert_eq!(truncate_path(short_unicode, 3), "\u{4e2d}/\u{6587}"); // last 3 chars
     }
 
     #[test]
