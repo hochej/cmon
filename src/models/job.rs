@@ -428,8 +428,10 @@ pub struct TresItem {
     pub name: String,
     #[serde(default)]
     pub id: u32,
+    /// Resource count. Can be negative (-2) when Slurm reports unavailable
+    /// metrics (e.g., energy tracking not configured).
     #[serde(default)]
-    pub count: u64,
+    pub count: i64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -645,8 +647,8 @@ impl JobHistoryInfo {
 
         // Try to get from TRES
         for tres in &self.tres.requested {
-            if tres.tres_type == "mem" {
-                return tres.count * 1024 * 1024; // Assuming MB
+            if tres.tres_type == "mem" && tres.count > 0 {
+                return tres.count as u64 * 1024 * 1024; // Assuming MB
             }
         }
 
@@ -670,7 +672,7 @@ impl JobHistoryInfo {
     #[must_use]
     pub fn allocated_gpus(&self) -> u32 {
         for tres in &self.tres.allocated {
-            if tres.tres_type == "gres" && tres.name.starts_with("gpu") {
+            if tres.tres_type == "gres" && tres.name.starts_with("gpu") && tres.count > 0 {
                 return tres.count as u32;
             }
         }
