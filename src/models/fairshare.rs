@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::slurm_responses::SlurmResponse;
 use super::time::{FloatValue, TimeValue};
 
 /// Slurm API response wrapper for sshare
@@ -15,6 +16,12 @@ pub struct SshareResponse {
 
     #[serde(default)]
     pub errors: Vec<String>,
+}
+
+impl SlurmResponse for SshareResponse {
+    fn errors(&self) -> &[String] {
+        &self.errors
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

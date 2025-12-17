@@ -8,6 +8,16 @@ use serde::{Deserialize, Serialize};
 use super::job::{JobHistoryInfo, JobInfo};
 use super::node::NodeInfo;
 
+/// Trait for Slurm command responses that have an errors field.
+///
+/// This trait enables generic handling of Slurm command responses, allowing
+/// the `execute_slurm_command` helper in `slurm.rs` to check for errors
+/// in a type-safe way across all response types.
+pub trait SlurmResponse {
+    /// Returns a reference to the errors reported by the Slurm command.
+    fn errors(&self) -> &[String];
+}
+
 /// Slurm API response wrapper for sinfo
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SinfoResponse {
@@ -18,6 +28,12 @@ pub struct SinfoResponse {
     pub errors: Vec<String>,
 }
 
+impl SlurmResponse for SinfoResponse {
+    fn errors(&self) -> &[String] {
+        &self.errors
+    }
+}
+
 /// Slurm API response wrapper for squeue
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SqueueResponse {
@@ -26,6 +42,12 @@ pub struct SqueueResponse {
 
     #[serde(default)]
     pub errors: Vec<String>,
+}
+
+impl SlurmResponse for SqueueResponse {
+    fn errors(&self) -> &[String] {
+        &self.errors
+    }
 }
 
 /// Overall cluster status
@@ -88,6 +110,12 @@ pub struct SacctResponse {
 
     #[serde(default)]
     pub warnings: Vec<SacctWarning>,
+}
+
+impl SlurmResponse for SacctResponse {
+    fn errors(&self) -> &[String] {
+        &self.errors
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

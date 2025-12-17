@@ -35,7 +35,8 @@ pub use node::{
 };
 pub use scheduler::{BackfillStats, CycleStats, SchedulerStats};
 pub use slurm_responses::{
-    ClusterStatus, PersonalSummary, SacctResponse, SacctWarning, SinfoResponse, SqueueResponse,
+    ClusterStatus, PersonalSummary, SacctResponse, SacctWarning, SinfoResponse, SlurmResponse,
+    SqueueResponse,
 };
 pub use state::JobState;
 pub use time::{FloatValue, TimeValue};

@@ -6,9 +6,10 @@
 
 use crate::models::{
     ClusterStatus, JobHistoryInfo, JobInfo, NodeInfo, PersonalSummary, SacctResponse,
-    SchedulerStats, SinfoResponse, SqueueResponse, SshareEntry, SshareResponse,
+    SchedulerStats, SinfoResponse, SlurmResponse, SqueueResponse, SshareEntry, SshareResponse,
 };
 use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -401,6 +402,44 @@ impl SlurmInterface {
         self.resolution == PathResolution::FallbackUnverified
     }
 
+    /// Execute a Slurm command and parse the JSON response.
+    ///
+    /// This is a generic helper that handles the common pattern of:
+    /// 1. Executing a pre-built Command
+    /// 2. Checking for successful execution
+    /// 3. Parsing the JSON output
+    /// 4. Checking for errors in the Slurm response
+    ///
+    /// # Arguments
+    /// * `cmd` - A pre-built Command (with all arguments already added)
+    /// * `error_context` - A human-readable description of the command (e.g., "sinfo", "squeue")
+    ///
+    /// # Type Parameters
+    /// * `T` - The response type to deserialize into. Must implement `DeserializeOwned` and `SlurmResponse`.
+    fn execute_slurm_command<T>(&self, mut cmd: Command, error_context: &str) -> Result<T>
+    where
+        T: DeserializeOwned + SlurmResponse,
+    {
+        let output = cmd
+            .output()
+            .with_context(|| format!("Failed to execute {} command", error_context))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("{} command failed: {}", error_context, stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let response: T = serde_json::from_str(&stdout)
+            .with_context(|| format!("Failed to parse {} JSON output", error_context))?;
+
+        if !response.errors().is_empty() {
+            anyhow::bail!("{} errors: {}", error_context, response.errors().join("; "));
+        }
+
+        Ok(response)
+    }
+
     /// Get node information from sinfo command
     ///
     /// # Arguments
@@ -438,20 +477,7 @@ impl SlurmInterface {
             cmd.arg("--states").arg(states.join(","));
         }
 
-        let output = cmd.output().context("Failed to execute sinfo command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("sinfo command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SinfoResponse =
-            serde_json::from_str(&stdout).context("Failed to parse sinfo JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("sinfo errors: {}", response.errors.join("; "));
-        }
+        let response: SinfoResponse = self.execute_slurm_command(cmd, "sinfo")?;
 
         Ok(response
             .sinfo
@@ -506,20 +532,7 @@ impl SlurmInterface {
             cmd.arg("-j").arg(ids.join(","));
         }
 
-        let output = cmd.output().context("Failed to execute squeue command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("squeue command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SqueueResponse =
-            serde_json::from_str(&stdout).context("Failed to parse squeue JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("squeue errors: {}", response.errors.join("; "));
-        }
+        let response: SqueueResponse = self.execute_slurm_command(cmd, "squeue")?;
 
         Ok(response
             .jobs
@@ -639,20 +652,7 @@ impl SlurmInterface {
             cmd.arg("-j").arg(ids.join(","));
         }
 
-        let output = cmd.output().context("Failed to execute sacct command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("sacct command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SacctResponse =
-            serde_json::from_str(&stdout).context("Failed to parse sacct JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("sacct errors: {}", response.errors.join("; "));
-        }
+        let response: SacctResponse = self.execute_slurm_command(cmd, "sacct")?;
 
         // Filter out job steps (keep only main job entries)
         // Job steps have IDs like "12345.0", "12345.batch", etc.
@@ -818,20 +818,7 @@ impl SlurmInterface {
             cmd.arg("-A").arg(account);
         }
 
-        let output = cmd.output().context("Failed to execute sshare command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("sshare command failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: SshareResponse =
-            serde_json::from_str(&stdout).context("Failed to parse sshare JSON output")?;
-
-        if !response.errors.is_empty() {
-            anyhow::bail!("sshare errors: {}", response.errors.join("; "));
-        }
+        let response: SshareResponse = self.execute_slurm_command(cmd, "sshare")?;
 
         Ok(response.shares.shares)
     }

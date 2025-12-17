@@ -338,35 +338,50 @@ validate_interval(&mut self.nodes_interval, RefreshField::NodesInterval, ...)?;
 
 ## Phase 3: Simplify slurm.rs and main.rs
 
-### 3.1 DRY Command Execution in slurm.rs
+### 3.1 DRY Command Execution in slurm.rs [DONE]
 
 **Problem:** `get_nodes()`, `get_jobs()`, `get_job_history()`, `get_fairshare()` repeat same 8-step pattern.
 
-**Fix:** Create generic helper:
+**Solution:** Created a `SlurmResponse` trait and generic `execute_slurm_command` helper:
+
 ```rust
-fn execute_slurm_command<T: DeserializeOwned>(
-    &self,
-    command: &str,
-    args: &[&str],
-    error_context: &str,
-) -> Result<T> {
-    let output = Command::new(command)
-        .args(args)
-        .output()
-        .with_context(|| format!("Failed to execute {}", error_context))?;
+// In models/slurm_responses.rs
+/// Trait for Slurm command responses that have an errors field.
+pub trait SlurmResponse {
+    fn errors(&self) -> &[String];
+}
+
+// In slurm.rs
+fn execute_slurm_command<T>(&self, mut cmd: Command, error_context: &str) -> Result<T>
+where
+    T: DeserializeOwned + SlurmResponse,
+{
+    let output = cmd.output()
+        .with_context(|| format!("Failed to execute {} command", error_context))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("{} failed: {}", error_context, stderr);
+        anyhow::bail!("{} command failed: {}", error_context, stderr);
     }
 
-    let result: T = serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("Failed to parse {} JSON", error_context))?;
-    Ok(result)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let response: T = serde_json::from_str(&stdout)
+        .with_context(|| format!("Failed to parse {} JSON output", error_context))?;
+
+    if !response.errors().is_empty() {
+        anyhow::bail!("{} errors: {}", error_context, response.errors().join("; "));
+    }
+
+    Ok(response)
 }
 ```
 
-**Savings:** ~80 lines
+**Key improvements over original plan:**
+- Added `SlurmResponse` trait for type-safe error handling across all response types
+- Helper takes a pre-built `Command` (more flexible than args slice)
+- Trait implemented for all 4 response types: `SinfoResponse`, `SqueueResponse`, `SacctResponse`, `SshareResponse`
+
+**Savings:** ~60 lines of duplicated command execution/parsing code
 
 ### 3.2 DRY Watch Loop in main.rs
 
