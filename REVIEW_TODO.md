@@ -1,0 +1,91 @@
+# Review TODO List
+
+Branch: `feat/portable-cluster-config`
+Commits ahead of `master`:
+
+- [x] a618af9 refactor: use struct-level #[serde(default)] for RefreshConfig (Step 1)
+  - Reviewed. Logic is sound. `#[serde(default)]` is correctly applied to `RefreshConfig` and other config structs, enabling partial configuration in TOML files.
+  - Note: `TuiConfig::merge` replaces entire sections (e.g., `refresh`, `display`) from the new config, rather than merging individual fields. This means a user config file will reset unspecified fields in that section to their defaults, effectively ignoring values from `/etc/cmon/config.toml` for that section. This appears to be a known design choice or current limitation.
+- [x] fa8b904 refactor: extract find_partition_key utility for case-insensitive matching
+  - Reviewed. Logic is sound. The utility function correctly implements case-insensitive matching and is consistently applied in both `display.rs` and `tui/app/mod.rs`. Tests in `utils.rs` cover edge cases. Idiomatic usage of iterators.
+- [x] d7d4139 fix: handle zero job_id gracefully instead of panicking
+  - Reviewed. Logic is sound.
+  - Replaced `.expect()` with `Option` return type in `TuiJobInfo::from_job_info`.
+  - Updated `src/tui/runtime.rs` to use `filter_map`.
+  - Prevents panic on invalid job IDs (0) and logs a warning instead.
+- [x] 5e2f976 refactor: TUI support files cleanup (Phase 7)
+  - Reviewed.
+  - Phase 7.1: `TerminalCapabilities` correctly made private.
+  - Phase 7.2: `fetch_and_send_scheduler_stats` refactored to use `handle_fetch_result`, improving consistency.
+  - Phase 7.3: Dead code annotations audit is correct. `InputEvent::Resize` is used in `spawn_input_task`. `sort_by` to `sort_by_key` improvement is idiomatic.
+- [x] ae3fd86 refactor: add build_styled_table generic helper (Phase 6.3)
+  - Reviewed. Logic is sound. Reduces code duplication and enforces consistent styling across all tables.
+- [x] b2533f8 refactor: decompose format_job_details into section builders (Phase 6.2)
+  - Reviewed. Logic is sound.
+  - `format_job_details` correctly split into 7 focused helper functions.
+  - New helpers (`build_job_basic_info`, `build_job_time_info`, etc.) are private and logically consistent.
+  - `wrap_text_smart` logic for line wrapping looks correct.
+  - Greatly improves readability of the display logic.
+- [x] 2ce387d refactor: replace stringly-typed color API with BoxColor enum (Phase 6.1)
+  - Reviewed. Logic is sound.
+  - Replaced string literals with `BoxColor` enum, improving type safety.
+  - `BoxColor::apply` correctly handles color application.
+  - Logic change in `pad_line_colored` correctly enables Yellow/Blue support (previously defaulted to Blue), though currently unused.
+- [x] 3031de3 refactor: decompose render_job_detail_popup into section builders (Phase 5.5)
+  - Reviewed. Logic is sound.
+  - Correctly extracts logic into 6 focused helper functions (`build_job_header_section`, `build_time_section`, etc.).
+  - Lifetime handling (`'a` for borrowed strings, `'static` for formatted/owned strings) is correct and safe.
+  - Improves readability of `render_job_detail_popup` significantly (280 -> 45 lines).
+- [ ] 421f696 refactor: unify personal jobs panels with shared function (Phase 5.4)
+- [ ] 32024f7 refactor: unify problem nodes rendering with shared function (Phase 5.3)
+- [ ] 5674c9e refactor: add section_header() and detail_row() helpers to widgets.rs (Phase 5.2)
+- [ ] aaa9114 refactor: split tui/ui.rs into submodules (Phase 5.1)
+- [ ] 601ea23 refactor: implement Exportable trait for unified export logic (Phase 4.3)
+- [ ] 10c7a9c refactor: consolidate selection accessors with focused_job() (Phase 4.2)
+- [ ] 4106bb3 refactor: split tui/app.rs into submodules (Phase 4.1)
+- [ ] b240d71 refactor: remove dead code - unused variants, fields, and methods (Phase 3.3)
+- [x] 720493d refactor: add run_with_optional_watch helper to DRY watch loop pattern (Phase 3.2)
+  - Reviewed. Logic is sound. Helper correctly unifies watch/single-run modes. `move` closures correctly capture dependencies. Type signatures match. Significant reduction in boilerplate.
+- [x] 6c980e2 refactor: add SlurmResponse trait and execute_slurm_command helper (Phase 3.1)
+  - Reviewed. Logic is sound. Generic `execute_slurm_command` helper correctly reduces duplication across 4 commands. `SlurmResponse` trait provides type-safe error checking. Error handling with `anyhow` is idiomatic.
+- [x] 3783f07 refactor: extract validate_interval helper with RefreshField enum (Phase 2.3)
+  - Reviewed. Logic preserved. 4 repetitive blocks successfully replaced with `validate_interval` helper. `RefreshField` enum adds type safety. No regressions found.
+- [x] 3b7c954 docs: mark Phase 2.2b (state checker macro) as complete in TASKS.md
+  - Reviewed. Trivial docs update.
+- [x] b2477bd refactor: use define_state_checkers! macro to reduce is_* boilerplate
+  - Reviewed. Logic is sound. Macro correctly generates `is_*` methods, reducing ~140 lines of boilerplate. New `JobState` variants (`BootFail`, `Deadline`) are correctly integrated into `tui/app.rs` and `tui/theme.rs`.
+- [x] 67e08e2 refactor: use const arrays for primary_state() (Phase 2.2)
+  - Reviewed. Logic is sound. Array constants for state precedence are a good improvement.
+- [x] 232589a refactor: split models.rs into submodules (Phase 2.1)
+  - Reviewed. Logic is sound. Modularization is clean. `models/mod.rs` correctly re-exports types to maintain API compatibility. `models/time.rs` introduces a nice `TimeValue` abstraction. Tests are preserved and passing.
+- [x] b2f467d docs: mark Phase 1.1 and 1.2 as complete in TASKS.md
+  - Reviewed. Trivial documentation update.
+- [x] 11c0757 refactor: create shared formatting module (Phase 1.1)
+  - Reviewed. Successfully consolidates formatting logic into `src/formatting.rs`, removing duplication.
+  - Note: The moved `truncate_string` and `truncate_path` functions still use byte slicing (`s[..len]`), inheriting the potential panic on multi-byte characters flagged in 6664164. This should be fixed in the new `src/formatting.rs` module.
+- [x] 4cfc462 refactor: replace clone().unwrap_or_default() with as_deref()
+  - Reviewed. Verified usage of as_deref() in TUI code (now in src/tui/ui/nodes.rs and src/tui/ui/problems.rs) and preservation of clone() in src/display.rs.
+- [x] 959fbc9 refactor: use iterator combinators for GPU parsing
+  - Reviewed. Logic verified in current location (src/models/job.rs and src/models/fairshare.rs). Idiomatic use of iterator combinators confirmed.
+- [x] b44b1d6 refactor: consolidate JobState enum into models module
+  - Reviewed. Clean move of JobState enum to models.rs. Logic preserved.
+- [x] aa1dc6a refactor: eliminate string allocations in JobInfo state predicates
+  - Reviewed. Good performance improvement, eliminates unnecessary String allocations.
+- [x] bdd7d5b chore: remove NEXT_STEPS.md
+  - Reviewed. Clean cleanup of obsolete planning document.
+- [ ] 6664164 fix: truncate job names in jobs table to prevent column overflow
+  - Review: Solves the overflow issue, BUT introduces a potential panic.
+  - Issue: Uses `truncate_string` which slices strings by byte index. If `job.name` contains multi-byte Unicode characters (e.g. emoji, non-Latin scripts) and the truncation point falls inside a character, the program will panic.
+  - Recommendation: Fix `truncate_string` in `src/formatting.rs` to be Unicode-aware (e.g., using `char_indices` or `chars().take()`).
+
+- [x] 6fd5431 fix: correct box rendering width and preserve partition name casing
+  - Reviewed. Box width calculation fixed (78 -> 80 total). Partition casing logic improved to case-insensitive matching while preserving original names.
+- [x] 2daa05b feat!: complete codebase portability and robustness overhaul
+  - Reviewed. Massive refactoring that greatly improves architecture and portability.
+  - Note: `App::new()` loads config redundantly (also loaded in `main` and `run_tui`), but this is minor.
+  - Note: `NonZeroU64` conversion in `TuiJobInfo` introduces a potential panic if Slurm returns job ID 0, but this is addressed in later commit `d7d4139`.
+  - Note: Rust 1.85 requirement for `let_chains` is verified in `Cargo.toml`.
+- [x] c105ade docs: rewrite README for conciseness and clarity
+  - Reviewed. Validated new README structure and `init-config` command implementation. Note: Slurm requirement lowered to 21.08+, which is assumed correct.
+- [x] 0dcab9a feat: make cluster display portable via configurable settings
+  - Reviewed. Note: Initial implementation had case-sensitivity issues with partition ordering, but this is addressed in later commits (6fd5431, fa8b904). Implementation otherwise solid.
