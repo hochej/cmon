@@ -51,17 +51,17 @@ pub fn render_personal_view(app: &App, frame: &mut Frame, area: Rect, theme: &Th
         render_fairshare_tree(app, frame, chunks[1], theme, fairshare_focused);
         // Running jobs section
         let running_focused = app.personal_view.selected_panel == PersonalPanel::Running;
-        render_personal_running_jobs(app, frame, chunks[2], theme, running_focused);
+        render_personal_jobs_panel(app, frame, chunks[2], theme, running_focused, PersonalPanel::Running);
         // Pending jobs section
         let pending_focused = app.personal_view.selected_panel == PersonalPanel::Pending;
-        render_personal_pending_jobs(app, frame, chunks[3], theme, pending_focused);
+        render_personal_jobs_panel(app, frame, chunks[3], theme, pending_focused, PersonalPanel::Pending);
     } else {
         // Running jobs section
         let running_focused = app.personal_view.selected_panel == PersonalPanel::Running;
-        render_personal_running_jobs(app, frame, chunks[1], theme, running_focused);
+        render_personal_jobs_panel(app, frame, chunks[1], theme, running_focused, PersonalPanel::Running);
         // Pending jobs section
         let pending_focused = app.personal_view.selected_panel == PersonalPanel::Pending;
-        render_personal_pending_jobs(app, frame, chunks[2], theme, pending_focused);
+        render_personal_jobs_panel(app, frame, chunks[2], theme, pending_focused, PersonalPanel::Pending);
     }
 }
 
@@ -125,14 +125,33 @@ fn render_personal_summary(app: &App, frame: &mut Frame, area: Rect, theme: &The
     frame.render_widget(para, area);
 }
 
-fn render_personal_running_jobs(
+/// Unified rendering function for personal job panels (Running and Pending).
+/// Uses the existing `PersonalPanel` enum to distinguish between panel types.
+fn render_personal_jobs_panel(
     app: &App,
     frame: &mut Frame,
     area: Rect,
     theme: &Theme,
     focused: bool,
+    panel: PersonalPanel,
 ) {
-    let running_jobs = app.my_running_jobs();
+    // Get jobs and panel-specific configuration based on panel type
+    let (jobs, title_prefix, empty_msg, selected_idx) = match panel {
+        PersonalPanel::Running => (
+            app.my_running_jobs(),
+            "Running Jobs",
+            "No running jobs",
+            app.personal_view.running_jobs_state.selected,
+        ),
+        PersonalPanel::Pending => (
+            app.my_pending_jobs(),
+            "Pending Jobs",
+            "No pending jobs",
+            app.personal_view.pending_jobs_state.selected,
+        ),
+        // Summary and Fairshare panels are handled by separate functions
+        _ => return,
+    };
 
     // Highlight border if this panel is focused
     let border_style = if focused {
@@ -145,19 +164,20 @@ fn render_personal_running_jobs(
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(format!(
-            " Running Jobs ({}) {} ",
-            running_jobs.len(),
+            " {} ({}) {} ",
+            title_prefix,
+            jobs.len(),
             if focused { "[Tab to switch]" } else { "" }
         ));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if running_jobs.is_empty() {
+    if jobs.is_empty() {
         let msg = if app.data.jobs.last_updated.is_none() {
             "Loading jobs..."
         } else {
-            "No running jobs"
+            empty_msg
         };
         let para = Paragraph::new(msg)
             .style(Style::default().fg(theme.border))
@@ -166,48 +186,72 @@ fn render_personal_running_jobs(
         return;
     }
 
-    // Table header
-    let header_cells = ["ID", "Name", "Account", "Part", "Elapsed", "Remaining"]
+    // Table headers differ by panel type
+    let headers: &[&str] = match panel {
+        PersonalPanel::Running => &["ID", "Name", "Account", "Part", "Elapsed", "Remaining"],
+        PersonalPanel::Pending => &["ID", "Name", "Account", "Part", "Reason", "Est.Start"],
+        _ => return,
+    };
+
+    let header_cells = headers
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
     let header = Row::new(header_cells)
         .style(Style::default().bg(theme.header_bg))
         .height(1);
 
-    let selected_idx = app.personal_view.running_jobs_state.selected;
     let available_height = inner.height.saturating_sub(1) as usize;
-    let scroll_offset = calculate_scroll_offset(selected_idx, available_height, running_jobs.len());
+    let scroll_offset = calculate_scroll_offset(selected_idx, available_height, jobs.len());
 
-    let rows: Vec<Row> = running_jobs
+    let rows: Vec<Row> = jobs
         .iter()
         .enumerate()
         .skip(scroll_offset)
         .take(available_height)
         .map(|(idx, job)| {
-            // Calculate time remaining with color coding
-            let (remaining_str, remaining_color) = if let Some(remaining) = job.time_remaining() {
-                let secs = remaining.as_secs();
-                let color = if secs < 3600 {
-                    theme.progress_crit // Less than 1 hour - critical (red)
-                } else if secs < 6 * 3600 {
-                    theme.progress_warn // Less than 6 hours - warning (orange)
-                } else {
-                    theme.progress_full // Plenty of time (green)
-                };
-                (format_duration_hms(secs), color)
-            } else {
-                ("N/A".to_string(), theme.border)
+            // First 4 columns are common
+            let common_cells = vec![
+                Cell::from(job.job_id.to_string()),
+                Cell::from(truncate_string(&job.name, 18)),
+                Cell::from(job.account.clone()),
+                Cell::from(job.partition.clone()),
+            ];
+
+            // Last 2 columns differ by panel type
+            let row = match panel {
+                PersonalPanel::Running => {
+                    // Calculate time remaining with color coding
+                    let (remaining_str, remaining_color) =
+                        if let Some(remaining) = job.time_remaining() {
+                            let secs = remaining.as_secs();
+                            let color = if secs < 3600 {
+                                theme.progress_crit // Less than 1 hour - critical (red)
+                            } else if secs < 6 * 3600 {
+                                theme.progress_warn // Less than 6 hours - warning (orange)
+                            } else {
+                                theme.progress_full // Plenty of time (green)
+                            };
+                            (format_duration_hms(secs), color)
+                        } else {
+                            ("N/A".to_string(), theme.border)
+                        };
+
+                    let mut cells = common_cells;
+                    cells.push(Cell::from(job.elapsed_display()));
+                    cells.push(
+                        Cell::from(remaining_str).style(Style::default().fg(remaining_color)),
+                    );
+                    Row::new(cells)
+                }
+                PersonalPanel::Pending => {
+                    let mut cells = common_cells;
+                    cells.push(Cell::from(truncate_string(&job.state_reason, 12)));
+                    cells.push(Cell::from(job.estimated_start_display()));
+                    Row::new(cells)
+                }
+                _ => return Row::new(common_cells),
             };
 
-            let row = Row::new(vec![
-                Cell::from(job.job_id.to_string()),
-                Cell::from(truncate_string(&job.name, 18)),
-                Cell::from(job.account.clone()),
-                Cell::from(job.partition.clone()),
-                Cell::from(job.elapsed_display()),
-                Cell::from(remaining_str).style(Style::default().fg(remaining_color)),
-            ]);
-
             // Highlight selected row if this panel is focused
             if focused && idx == selected_idx {
                 row.style(Style::default().bg(theme.selected_bg))
@@ -217,104 +261,26 @@ fn render_personal_running_jobs(
         })
         .collect();
 
-    let widths = [
-        Constraint::Length(10), // ID
-        Constraint::Min(12),    // Name
-        Constraint::Length(10), // Account
-        Constraint::Length(8),  // Partition
-        Constraint::Length(11), // Elapsed
-        Constraint::Length(12), // Remaining
-    ];
-
-    let table = Table::new(rows, widths).header(header);
-    frame.render_widget(table, inner);
-}
-
-fn render_personal_pending_jobs(
-    app: &App,
-    frame: &mut Frame,
-    area: Rect,
-    theme: &Theme,
-    focused: bool,
-) {
-    let pending_jobs = app.my_pending_jobs();
-
-    // Highlight border if this panel is focused
-    let border_style = if focused {
-        Style::default().fg(theme.account_highlight)
-    } else {
-        Style::default().fg(theme.border)
+    // Column widths differ slightly by panel type
+    let widths: [Constraint; 6] = match panel {
+        PersonalPanel::Running => [
+            Constraint::Length(10), // ID
+            Constraint::Min(12),    // Name
+            Constraint::Length(10), // Account
+            Constraint::Length(8),  // Partition
+            Constraint::Length(11), // Elapsed
+            Constraint::Length(12), // Remaining
+        ],
+        PersonalPanel::Pending => [
+            Constraint::Length(10), // ID
+            Constraint::Min(12),    // Name
+            Constraint::Length(10), // Account
+            Constraint::Length(8),  // Partition
+            Constraint::Length(12), // Reason
+            Constraint::Length(10), // Est.Start
+        ],
+        _ => return,
     };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(format!(
-            " Pending Jobs ({}) {} ",
-            pending_jobs.len(),
-            if focused { "[Tab to switch]" } else { "" }
-        ));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if pending_jobs.is_empty() {
-        let msg = if app.data.jobs.last_updated.is_none() {
-            "Loading jobs..."
-        } else {
-            "No pending jobs"
-        };
-        let para = Paragraph::new(msg)
-            .style(Style::default().fg(theme.border))
-            .alignment(Alignment::Center);
-        frame.render_widget(para, inner);
-        return;
-    }
-
-    // Table header
-    let header_cells = ["ID", "Name", "Account", "Part", "Reason", "Est.Start"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header_fg).bold()));
-    let header = Row::new(header_cells)
-        .style(Style::default().bg(theme.header_bg))
-        .height(1);
-
-    let selected_idx = app.personal_view.pending_jobs_state.selected;
-    let available_height = inner.height.saturating_sub(1) as usize;
-    let scroll_offset = calculate_scroll_offset(selected_idx, available_height, pending_jobs.len());
-
-    let rows: Vec<Row> = pending_jobs
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(available_height)
-        .map(|(idx, job)| {
-            let row = Row::new(vec![
-                Cell::from(job.job_id.to_string()),
-                Cell::from(truncate_string(&job.name, 18)),
-                Cell::from(job.account.clone()),
-                Cell::from(job.partition.clone()),
-                Cell::from(truncate_string(&job.state_reason, 12)),
-                Cell::from(job.estimated_start_display()),
-            ]);
-
-            // Highlight selected row if this panel is focused
-            if focused && idx == selected_idx {
-                row.style(Style::default().bg(theme.selected_bg))
-            } else {
-                row
-            }
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(10), // ID
-        Constraint::Min(12),    // Name
-        Constraint::Length(10), // Account
-        Constraint::Length(8),  // Partition
-        Constraint::Length(12), // Reason
-        Constraint::Length(10), // Est.Start
-    ];
 
     let table = Table::new(rows, widths).header(header);
     frame.render_widget(table, inner);

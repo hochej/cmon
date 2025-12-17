@@ -630,17 +630,34 @@ creating a new `ProblemNodeType` enum, avoiding redundant type definitions.
 
 **Savings:** 54 lines (94 deletions, 40 insertions)
 
-### 5.4 Unify Personal Jobs Panels
+### 5.4 Unify Personal Jobs Panels [DONE]
 
-Merge `render_personal_running_jobs()` and `render_personal_pending_jobs()`:
+Merged `render_personal_running_jobs()` and `render_personal_pending_jobs()` into a single
+`render_personal_jobs_panel()` function that uses the existing `PersonalPanel` enum:
 
 ```rust
-enum PersonalJobType { Running, Pending }
-
-fn render_personal_jobs_panel(..., job_type: PersonalJobType) { ... }
+/// Unified rendering function for personal job panels (Running and Pending).
+/// Uses the existing `PersonalPanel` enum to distinguish between panel types.
+fn render_personal_jobs_panel(
+    app: &App,
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    focused: bool,
+    panel: PersonalPanel,  // Reuses existing enum instead of new PersonalJobType
+) {
+    // Configuration derived from panel type via match:
+    // - title_prefix, empty_msg, selected_idx, headers, column widths
+    // - Row rendering logic with match for running (time remaining w/ colors) vs pending
+}
 ```
 
-**Savings:** ~80 lines
+**Key decision:** Reused the existing `PersonalPanel` enum from `state.rs` instead of
+creating a new `PersonalJobType` enum, following the pattern established in Phase 5.3.
+
+**Actual savings:** 34 lines (130 deletions, 96 insertions) - less than predicted ~80 lines
+because the row rendering logic differs significantly (running jobs have color-coded time
+remaining display while pending jobs show reason and estimated start).
 
 ### 5.5 Decompose `render_job_detail_popup()`
 
