@@ -267,19 +267,11 @@ pub fn detect_slurm_version(slurm_bin_path: &Path) -> Result<SlurmVersion, Slurm
 #[derive(Debug, Clone)]
 pub enum JsonSupportResult {
     /// JSON is supported (Slurm 21.08+)
-    Supported(SlurmVersion),
+    Supported,
     /// Slurm version is too old for JSON support
     UnsupportedVersion(SlurmVersion),
     /// Could not detect Slurm version
     DetectionFailed(SlurmVersionError),
-}
-
-impl JsonSupportResult {
-    /// Returns true if JSON is supported
-    #[must_use]
-    pub fn is_supported(&self) -> bool {
-        matches!(self, JsonSupportResult::Supported(_))
-    }
 }
 
 /// Check if Slurm version supports JSON output
@@ -288,13 +280,11 @@ impl JsonSupportResult {
 /// - JSON supported (Slurm 21.08+)
 /// - Slurm too old for JSON
 /// - Version detection failed
-///
-/// Use `is_supported()` for a simple boolean check.
 pub fn check_slurm_json_support(slurm_bin_path: &Path) -> JsonSupportResult {
     match detect_slurm_version(slurm_bin_path) {
         Ok(version) => {
             if version.supports_json() {
-                JsonSupportResult::Supported(version)
+                JsonSupportResult::Supported
             } else {
                 JsonSupportResult::UnsupportedVersion(version)
             }
@@ -309,7 +299,7 @@ pub fn check_slurm_json_support(slurm_bin_path: &Path) -> JsonSupportResult {
 /// a simple boolean.
 pub fn check_slurm_json_support_with_warnings(slurm_bin_path: &Path) -> bool {
     match check_slurm_json_support(slurm_bin_path) {
-        JsonSupportResult::Supported(_) => true,
+        JsonSupportResult::Supported => true,
         JsonSupportResult::UnsupportedVersion(version) => {
             eprintln!(
                 "Warning: Slurm {} detected. JSON output requires Slurm 21.08 or later.",
@@ -376,15 +366,6 @@ impl SlurmInterface {
             self.resolution,
             PathResolution::Fallback | PathResolution::FallbackUnverified
         )
-    }
-
-    /// Check if the fallback path is unverified (sinfo not found at /usr/bin)
-    ///
-    /// Returns true if Slurm binaries were not found at the fallback path,
-    /// indicating that commands will likely fail.
-    #[must_use]
-    pub fn is_unverified_fallback(&self) -> bool {
-        self.resolution == PathResolution::FallbackUnverified
     }
 
     /// Execute a Slurm command and parse the JSON response.
