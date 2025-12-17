@@ -906,199 +906,250 @@ fn format_job_history_brief(jobs: &[&JobHistoryInfo]) -> String {
     table.to_string()
 }
 
-/// Format a single job's detailed information
-pub fn format_job_details(job: &JobHistoryInfo, node_prefix_strip: &str) -> String {
-    let mut output = String::new();
+// ============================================================================
+// Job Details Section Builders
+// ============================================================================
+// These helpers decompose format_job_details() into logical sections,
+// each returning padded lines ready to be joined into the final output.
 
-    // Header
-    output.push_str(&format!("\n{}\n", box_top(" Job Details ").blue()));
-    output.push_str(&format!("{}\n", box_empty().blue()));
-
-    // Basic Info
-    let job_id_line = format!("  {} {}", "Job ID:".bold(), job.job_id.to_string().cyan());
-    output.push_str(&format!("{}\n", pad_line(&job_id_line)));
-
-    let name_line = format!("  {} {}", "Name:".bold(), job.name);
-    output.push_str(&format!("{}\n", pad_line(&name_line)));
-
-    let state_display = format_history_state(job);
-    let state_line = format!("  {} {}", "State:".bold(), state_display);
-    output.push_str(&format!("{}\n", pad_line(&state_line)));
-
-    let user_line = format!("  {} {} ({})", "User:".bold(), job.user, job.account);
-    output.push_str(&format!("{}\n", pad_line(&user_line)));
-
-    let partition_line = format!(
-        "  {} {} (QoS: {})",
-        "Partition:".bold(),
-        job.partition,
-        job.qos
-    );
-    output.push_str(&format!("{}\n", pad_line(&partition_line)));
+/// Build the basic info section (Job ID, Name, State, User, Partition, Nodes)
+fn build_job_basic_info(job: &JobHistoryInfo, node_prefix_strip: &str) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {} {}", "Job ID:".bold(), job.job_id.to_string().cyan())),
+        pad_line(&format!("  {} {}", "Name:".bold(), job.name)),
+        pad_line(&format!("  {} {}", "State:".bold(), format_history_state(job))),
+        pad_line(&format!("  {} {} ({})", "User:".bold(), job.user, job.account)),
+        pad_line(&format!(
+            "  {} {} (QoS: {})",
+            "Partition:".bold(),
+            job.partition,
+            job.qos
+        )),
+    ];
 
     if !job.nodes.is_empty() && job.nodes != "None assigned" {
-        let nodes_line = format!(
+        lines.push(pad_line(&format!(
             "  {} {}",
             "Nodes:".bold(),
             shorten_node_list(&job.nodes, node_prefix_strip)
-        );
-        output.push_str(&format!("{}\n", pad_line(&nodes_line)));
+        )));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Time Information
-    let time_header = format!("  {}", "Time Information".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&time_header)));
-
-    let submit_line = format!("    Submitted:  {}", job.submit_time_display());
-    output.push_str(&format!("{}\n", pad_line(&submit_line)));
+/// Build the time information section (Submit, Start, End, Elapsed, Wait Time)
+fn build_job_time_info(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Time Information".bold().underline())),
+        pad_line(&format!("    Submitted:  {}", job.submit_time_display())),
+    ];
 
     if job.time.start > 0 {
-        let start_line = format!("    Started:    {}", job.start_time_display());
-        output.push_str(&format!("{}\n", pad_line(&start_line)));
+        lines.push(pad_line(&format!("    Started:    {}", job.start_time_display())));
     }
 
     if job.time.end > 0 {
-        let end_line = format!("    Ended:      {}", job.end_time_display());
-        output.push_str(&format!("{}\n", pad_line(&end_line)));
+        lines.push(pad_line(&format!("    Ended:      {}", job.end_time_display())));
     }
 
-    let elapsed_line = format!(
+    lines.push(pad_line(&format!(
         "    Elapsed:    {} / {}",
         job.elapsed_display(),
         job.time_limit_display()
-    );
-    output.push_str(&format!("{}\n", pad_line(&elapsed_line)));
+    )));
 
     if let Some(wait) = job.wait_time() {
-        let wait_line = format!("    Wait Time:  {}", format_duration_seconds(wait));
-        output.push_str(&format!("{}\n", pad_line(&wait_line)));
+        lines.push(pad_line(&format!("    Wait Time:  {}", format_duration_seconds(wait))));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Resource Allocation
-    let resource_header = format!("  {}", "Resource Allocation".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&resource_header)));
-
-    let cpu_line = format!("    CPUs:       {}", job.required.cpus);
-    output.push_str(&format!("{}\n", pad_line(&cpu_line)));
+/// Build the resource allocation section (CPUs, Memory, GPUs)
+fn build_job_resources(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Resource Allocation".bold().underline())),
+        pad_line(&format!("    CPUs:       {}", job.required.cpus)),
+    ];
 
     let requested_mem = job.requested_memory();
     if requested_mem > 0 {
-        let mem_line = format!("    Memory:     {}", format_bytes(requested_mem));
-        output.push_str(&format!("{}\n", pad_line(&mem_line)));
+        lines.push(pad_line(&format!("    Memory:     {}", format_bytes(requested_mem))));
     }
 
     let gpus = job.allocated_gpus();
     if gpus > 0 {
         let gpu_type = job.gpu_type().unwrap_or_else(|| "GPU".to_string());
-        let gpu_line = format!("    GPUs:       {}x {}", gpus, gpu_type);
-        output.push_str(&format!("{}\n", pad_line(&gpu_line)));
+        lines.push(pad_line(&format!("    GPUs:       {}x {}", gpus, gpu_type)));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Efficiency Metrics
-    let efficiency_header = format!("  {}", "Efficiency Metrics".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&efficiency_header)));
+/// Build the efficiency metrics section (CPU and Memory efficiency with bars)
+fn build_job_efficiency(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Efficiency Metrics".bold().underline())),
+    ];
 
-    // CPU Efficiency with bar
-    if let Some(cpu_eff) = job.cpu_efficiency() {
-        let bar = create_efficiency_bar(cpu_eff);
-        let cpu_eff_line = format!("    CPU:        {} {:.1}%", bar, cpu_eff);
-        output.push_str(&format!("{}\n", pad_line(&cpu_eff_line)));
+    // CPU Efficiency
+    let cpu_line = if let Some(cpu_eff) = job.cpu_efficiency() {
+        format!("    CPU:        {} {:.1}%", create_efficiency_bar(cpu_eff), cpu_eff)
     } else {
-        let cpu_eff_line = "    CPU:        (no data)".to_string();
-        output.push_str(&format!("{}\n", pad_line(&cpu_eff_line)));
-    }
+        "    CPU:        (no data)".to_string()
+    };
+    lines.push(pad_line(&cpu_line));
 
-    // Memory Efficiency with bar
+    // Memory Efficiency
+    let requested_mem = job.requested_memory();
     let max_mem = job.max_memory_used();
-    if max_mem > 0 && requested_mem > 0 {
+    let mem_line = if max_mem > 0 && requested_mem > 0 {
         if let Some(mem_eff) = job.memory_efficiency() {
-            let bar = create_efficiency_bar(mem_eff);
-            let mem_eff_line = format!(
+            format!(
                 "    Memory:     {} {:.1}% ({} / {})",
-                bar,
+                create_efficiency_bar(mem_eff),
                 mem_eff,
                 format_bytes(max_mem),
                 format_bytes(requested_mem)
-            );
-            output.push_str(&format!("{}\n", pad_line(&mem_eff_line)));
+            )
+        } else {
+            "    Memory:     (no data)".to_string()
         }
     } else {
-        let mem_eff_line = "    Memory:     (no data)".to_string();
-        output.push_str(&format!("{}\n", pad_line(&mem_eff_line)));
+        "    Memory:     (no data)".to_string()
+    };
+    lines.push(pad_line(&mem_line));
+
+    lines
+}
+
+/// Build the exit information section (Exit Code, Signal) - only for completed jobs
+fn build_job_exit_info(job: &JobHistoryInfo) -> Option<Vec<String>> {
+    if job.is_running() || job.is_pending() {
+        return None;
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Exit Information".bold().underline())),
+    ];
 
-    // Exit Information
-    if !job.is_running() && !job.is_pending() {
-        let exit_header = format!("  {}", "Exit Information".bold().underline());
-        output.push_str(&format!("{}\n", pad_line(&exit_header)));
-
-        let exit_code_display = if let Some(code) = job.exit_code.return_code.value() {
-            if code == 0 {
-                "0 (Success)".green().to_string()
-            } else {
-                format!("{} (Error)", code).red().to_string()
-            }
+    let exit_code_display = if let Some(code) = job.exit_code.return_code.value() {
+        if code == 0 {
+            "0 (Success)".green().to_string()
         } else {
-            "-".white().to_string()
-        };
-        let exit_line = format!("    Exit Code:  {}", exit_code_display);
-        output.push_str(&format!("{}\n", pad_line(&exit_line)));
-
-        if !job.exit_code.signal.name.is_empty() {
-            let signal_line = format!("    Signal:     {}", job.exit_code.signal.name.red());
-            output.push_str(&format!("{}\n", pad_line(&signal_line)));
+            format!("{} (Error)", code).red().to_string()
         }
+    } else {
+        "-".white().to_string()
+    };
+    lines.push(pad_line(&format!("    Exit Code:  {}", exit_code_display)));
 
-        output.push_str(&format!("{}\n", box_empty().blue()));
+    if !job.exit_code.signal.name.is_empty() {
+        lines.push(pad_line(&format!("    Signal:     {}", job.exit_code.signal.name.red())));
     }
 
-    // Paths
-    let paths_header = format!("  {}", "Paths".bold().underline());
-    output.push_str(&format!("{}\n", pad_line(&paths_header)));
+    Some(lines)
+}
+
+/// Build the paths section (Work Dir, Stdout, Stderr)
+fn build_job_paths(job: &JobHistoryInfo) -> Vec<String> {
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Paths".bold().underline())),
+    ];
 
     if !job.working_directory.is_empty() {
-        let wd_line = format!(
+        lines.push(pad_line(&format!(
             "    Work Dir:   {}",
             truncate_path(&job.working_directory, 50)
-        );
-        output.push_str(&format!("{}\n", pad_line(&wd_line)));
+        )));
     }
 
     if !job.stdout.is_empty() {
-        let stdout_line = format!("    Stdout:     {}", truncate_path(&job.stdout, 50));
-        output.push_str(&format!("{}\n", pad_line(&stdout_line)));
+        lines.push(pad_line(&format!("    Stdout:     {}", truncate_path(&job.stdout, 50))));
     }
 
     if !job.stderr.is_empty() && job.stderr != job.stdout {
-        let stderr_line = format!("    Stderr:     {}", truncate_path(&job.stderr, 50));
-        output.push_str(&format!("{}\n", pad_line(&stderr_line)));
+        lines.push(pad_line(&format!("    Stderr:     {}", truncate_path(&job.stderr, 50))));
     }
 
-    output.push_str(&format!("{}\n", box_empty().blue()));
+    lines
+}
 
-    // Submit Line
-    if !job.submit_line.is_empty() {
-        let submit_header = format!("  {}", "Submit Command".bold().underline());
-        output.push_str(&format!("{}\n", pad_line(&submit_header)));
+/// Build the submit command section - only if submit_line is present
+fn build_job_submit_line(job: &JobHistoryInfo) -> Option<Vec<String>> {
+    if job.submit_line.is_empty() {
+        return None;
+    }
 
-        // Wrap long submit lines - 74 chars max (78 box width - 4 indent)
-        let submit_wrapped = wrap_text_smart(&job.submit_line, 72);
-        for line in submit_wrapped {
-            let submit_line = format!("    {}", line.bright_black());
-            output.push_str(&format!("{}\n", pad_line(&submit_line)));
+    let mut lines = vec![
+        pad_line(&format!("  {}", "Submit Command".bold().underline())),
+    ];
+
+    // Wrap long submit lines - 72 chars max (78 box width - 4 indent - 2 borders)
+    for wrapped_line in wrap_text_smart(&job.submit_line, 72) {
+        lines.push(pad_line(&format!("    {}", wrapped_line.bright_black())));
+    }
+
+    Some(lines)
+}
+
+/// Format a single job's detailed information
+pub fn format_job_details(job: &JobHistoryInfo, node_prefix_strip: &str) -> String {
+    let mut output = String::new();
+    let empty_line = format!("{}\n", box_empty().blue());
+
+    // Header
+    output.push_str(&format!("\n{}\n", box_top(" Job Details ").blue()));
+    output.push_str(&empty_line);
+
+    // Basic Info
+    for line in build_job_basic_info(job, node_prefix_strip) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Time Information
+    for line in build_job_time_info(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Resource Allocation
+    for line in build_job_resources(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Efficiency Metrics
+    for line in build_job_efficiency(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Exit Information (conditional)
+    if let Some(exit_lines) = build_job_exit_info(job) {
+        for line in exit_lines {
+            output.push_str(&format!("{line}\n"));
         }
-
-        output.push_str(&format!("{}\n", box_empty().blue()));
+        output.push_str(&empty_line);
     }
 
+    // Paths
+    for line in build_job_paths(job) {
+        output.push_str(&format!("{line}\n"));
+    }
+    output.push_str(&empty_line);
+
+    // Submit Command (conditional)
+    if let Some(submit_lines) = build_job_submit_line(job) {
+        for line in submit_lines {
+            output.push_str(&format!("{line}\n"));
+        }
+        output.push_str(&empty_line);
+    }
+
+    // Footer
     output.push_str(&format!("{}\n", box_bottom().blue()));
 
     output

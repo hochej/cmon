@@ -714,17 +714,28 @@ impl BoxColor {
 
 **Savings:** ~31 lines + compile-time type safety (no more typos like `"gren"`)
 
-### 6.2 Decompose `format_job_details()`
+### 6.2 Decompose `format_job_details()` [DONE]
+
+Decomposed the 195-line `format_job_details()` function into 7 focused section builder helpers:
 
 ```rust
-fn format_job_basic_info(job: &JobInfo) -> Vec<String>;
-fn format_job_time_info(job: &JobInfo) -> Vec<String>;
-fn format_job_resources(job: &JobInfo) -> Vec<String>;
-fn format_job_efficiency(job: &JobInfo) -> Vec<String>;
-fn format_job_paths(job: &JobInfo) -> Vec<String>;
+fn build_job_basic_info(job: &JobHistoryInfo, node_prefix_strip: &str) -> Vec<String>;
+fn build_job_time_info(job: &JobHistoryInfo) -> Vec<String>;
+fn build_job_resources(job: &JobHistoryInfo) -> Vec<String>;
+fn build_job_efficiency(job: &JobHistoryInfo) -> Vec<String>;
+fn build_job_exit_info(job: &JobHistoryInfo) -> Option<Vec<String>>;  // conditional
+fn build_job_paths(job: &JobHistoryInfo) -> Vec<String>;
+fn build_job_submit_line(job: &JobHistoryInfo) -> Option<Vec<String>>;  // conditional
 ```
 
-**Savings:** ~50 lines (net)
+**Key decisions:**
+- Used `JobHistoryInfo` (actual type used by the function) instead of proposed `JobInfo`
+- Added `build_job_exit_info()` and `build_job_submit_line()` for conditional sections
+- Each helper returns padded lines ready for output (no need for caller to apply padding)
+- Main function reduced to ~60 lines (clear section assembly with separator handling)
+- Used `build_` prefix for consistency with TUI codebase conventions (Phase 5.5)
+
+**Savings:** ~50 lines (net) + improved maintainability and testability
 
 ### 6.3 Create Generic Table Builder
 
