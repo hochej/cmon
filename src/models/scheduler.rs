@@ -29,9 +29,12 @@ pub struct BackfillStats {
 pub enum SchedulerStats {
     /// Scheduler stats successfully retrieved
     Available {
+        #[allow(dead_code)]
         jobs_pending: Option<u64>,
+        #[allow(dead_code)]
         jobs_running: Option<u64>,
         cycles: CycleStats,
+        #[allow(dead_code)]
         backfill: BackfillStats,
         #[allow(dead_code)]
         fetched_at: std::time::Instant,

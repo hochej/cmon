@@ -138,6 +138,7 @@ pub enum FilterType {
 #[derive(Debug, Clone, Default)]
 pub struct ActiveFilter {
     pub text: String,
+    #[allow(dead_code)]
     pub filter_type: FilterType,
 }
 

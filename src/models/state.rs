@@ -38,6 +38,7 @@
 macro_rules! define_state_checkers {
     ($($method:ident => [$($state:literal),+ $(,)?]),* $(,)?) => {
         $(
+            #[allow(dead_code)]
             #[must_use]
             pub fn $method(&self) -> bool {
                 self.has_state(&[$($state),+])

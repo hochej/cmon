@@ -14,6 +14,8 @@ pub enum InputEvent {
     /// Mouse input (optional feature)
     Mouse(MouseEvent),
     /// Terminal resize (constructed in runtime.rs, triggers re-render)
+    /// The width/height values are preserved for potential future use.
+    #[allow(dead_code)]
     Resize(u16, u16),
 }
 
