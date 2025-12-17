@@ -55,7 +55,7 @@ jobs:
     - name: Install system dependencies
       run: |
         dnf update -y
-        dnf install -y gcc gcc-c++ make git tar gzip ca-certificates curl
+        dnf install -y --allowerasing gcc gcc-c++ make git tar gzip ca-certificates curl
 
     - name: Checkout code
       uses: actions/checkout@v4
