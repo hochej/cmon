@@ -2,166 +2,233 @@ name: Build and Release
 
 on:
   push:
+    branches: [master, main]
     tags:
       - 'v*'
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'nightly'
+        type: choice
+        options:
+          - nightly
+          - none
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    name: Run Tests
+    name: Test
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache Cargo registry
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Cache Cargo index
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run tests
+        run: cargo test --release
 
-    - name: Cache Cargo build
-      uses: actions/cache@v4
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
 
-    - name: Run tests
-      run: cargo test --release
-
-    - name: Run clippy
-      run: cargo clippy -- -D warnings
-
-  build-linux:
-    name: Build Linux Binary (RHEL 9 Compatible)
+  build-linux-musl:
+    name: Build Linux (musl static)
     runs-on: ubuntu-latest
     needs: test
-    container:
-      image: almalinux:9
 
     steps:
-    - name: Install system dependencies
-      run: |
-        dnf update -y
-        dnf install -y --allowerasing gcc gcc-c++ make git tar gzip ca-certificates curl
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
 
-    - name: Install Rust
-      run: |
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install musl-tools and X11 dev libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools \
+            libx11-dev libxcb1-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev
 
-    - name: Verify Rust installation
-      run: |
-        export PATH="$HOME/.cargo/bin:$PATH"
-        rustc --version
-        cargo --version
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-musl-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Build release binary
-      run: |
-        export PATH="$HOME/.cargo/bin:$PATH"
-        cargo build --release
+      - name: Build release binary (musl)
+        run: cargo build --release --target x86_64-unknown-linux-musl
 
-    - name: Test binary
-      run: |
-        ./target/release/cmon --version
-        ./target/release/cmon --help
+      - name: Test binary
+        run: |
+          ./target/x86_64-unknown-linux-musl/release/cmon --version
+          ./target/x86_64-unknown-linux-musl/release/cmon --help
 
-    - name: Create distribution directory
-      run: mkdir -p dist
+      - name: Verify static linking
+        run: |
+          file ./target/x86_64-unknown-linux-musl/release/cmon
+          # Should show "statically linked"
 
-    - name: Copy and rename binary
-      run: |
-        cp target/release/cmon dist/cmon-linux-x86_64
-        chmod +x dist/cmon-linux-x86_64
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/cmon dist/cmon-linux-x86_64
+          chmod +x dist/cmon-linux-x86_64
 
-    - name: Upload binary artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: cmon-linux-x86_64
-        path: dist/cmon-linux-x86_64
-        retention-days: 30
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmon-linux-x86_64
+          path: dist/cmon-linux-x86_64
+          retention-days: 30
 
-  create-release:
-    name: Create Release
-    needs: build-linux
+  # Nightly release - updates on every push to master
+  release-nightly:
+    name: Release (Nightly)
+    needs: build-linux-musl
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "date=$(git log -1 --format=%cd --date=short)" >> $GITHUB_OUTPUT
+          echo "message=$(git log -1 --format=%s)" >> $GITHUB_OUTPUT
+
+      - name: Update nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          prerelease: true
+          files: |
+            artifacts/cmon-linux-x86_64/cmon-linux-x86_64
+          body: |
+            ## Nightly Build (unstable)
+
+            **Commit:** ${{ steps.sha.outputs.short }} - ${{ steps.commit.outputs.message }}
+            **Date:** ${{ steps.commit.outputs.date }}
+
+            This is an automatically updated nightly build from the `master` branch.
+            For stable releases, see the [latest stable release](../../releases/latest).
+
+            ### Installation
+
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/nightly/cmon-linux-x86_64 -o cmon
+            chmod +x cmon
+            ./cmon --version
+            ```
+
+            ### Note
+
+            This binary is statically linked (musl) and should work on any Linux distribution.
+            Nightly builds may contain bugs or incomplete features.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Versioned release - triggered by version tags
+  release-versioned:
+    name: Release (Versioned)
+    needs: build-linux-musl
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
+    permissions:
+      contents: write
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: |
-          artifacts/cmon-linux-x86_64/cmon-linux-x86_64
-        body: |
-          ## RHEL 9 Compatible Rust Binary Release
+      - name: Create versioned release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/cmon-linux-x86_64/cmon-linux-x86_64
+          body: |
+            ## cmon ${{ github.ref_name }}
 
-          Fast cluster monitoring tool for Slurm, written in Rust.
+            Fast cluster monitoring tool for Slurm, written in Rust.
 
-          ### Installation
+            ### Installation
 
-          Download the binary and make it executable:
-          ```bash
-          curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cmon-linux-x86_64 -o cmon
-          chmod +x cmon
-          ./cmon --version
-          ```
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cmon-linux-x86_64 -o cmon
+            chmod +x cmon
+            ./cmon --version
+            ```
 
-          ### Features
+            ### Binary Info
 
-          - **Fast**: 6-18x faster than Python version
-          - **Comprehensive state coverage**: 25+ node states, 26+ job states
-          - **State filtering**: `--state` flag to filter jobs/nodes
-          - **Node reasons**: See why nodes are DOWN/DRAINED
-          - **Watch mode**: Auto-refresh with `--watch` flag
-          - **Test coverage**: 36 unit tests
+            - **Target:** `x86_64-unknown-linux-musl` (statically linked)
+            - **Compatibility:** Any Linux distribution (no glibc dependency)
 
-          ### Usage
+            ### Features
 
-          ```bash
-          # View cluster status
-          cmon status
+            - **Fast**: Written in Rust for performance
+            - **Comprehensive state coverage**: 25+ node states, 26+ job states
+            - **State filtering**: `--state` flag to filter jobs/nodes
+            - **Watch mode**: Auto-refresh with `--watch` flag
+            - **TUI mode**: Interactive terminal UI with `cmon tui`
 
-          # View running jobs
-          cmon jobs
+            ### Usage
 
-          # View all jobs
-          cmon jobs --all
+            ```bash
+            cmon status          # View cluster status
+            cmon jobs            # View running jobs
+            cmon jobs --all      # View all jobs
+            cmon nodes           # View node status
+            cmon tui             # Interactive TUI
+            ```
 
-          # Filter by state
-          cmon jobs --state PENDING,RUNNING
-          cmon nodes --state DRAINING,DOWN
+            ### Changelog
 
-          # Watch mode (refresh every 5 seconds)
-          cmon nodes --watch 5
-          ```
-
-          ### Changes
-          See commit history for detailed changes.
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            See commit history for detailed changes.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
