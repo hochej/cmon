@@ -2114,12 +2114,16 @@ impl App {
                 match job.state {
                     JobState::Running => running += 1,
                     JobState::Pending => pending += 1,
+                    // All terminal states count as "completed" for array progress
                     JobState::Completed
                     | JobState::Failed
                     | JobState::Cancelled
                     | JobState::Timeout
                     | JobState::OutOfMemory
-                    | JobState::NodeFail => completed += 1,
+                    | JobState::NodeFail
+                    | JobState::BootFail
+                    | JobState::Deadline
+                    | JobState::Preempted => completed += 1,
                     _ => {}
                 }
                 max_elapsed = max_elapsed.max(job.elapsed_seconds);

@@ -4,6 +4,50 @@
 //! consolidating what was previously duplicated between different parts of the code.
 //! It also provides const arrays defining the priority order for determining the
 //! primary state to display when multiple states are present.
+//!
+//! The `define_state_checkers!` macro reduces boilerplate by generating `is_*()` methods
+//! from a declarative definition of state names and their Slurm string representations.
+
+// ============================================================================
+// State Checker Macro
+// ============================================================================
+
+/// Macro to generate `is_*()` methods for state checking.
+///
+/// This eliminates the boilerplate of writing nearly identical methods for each state.
+/// Each generated method calls `has_state()` with the appropriate state strings.
+///
+/// # Usage
+///
+/// ```ignore
+/// define_state_checkers! {
+///     is_running => ["RUNNING"],
+///     is_pending => ["PENDING"],
+///     is_draining => ["DRAINING", "DRAIN", "DRNG"],
+/// }
+/// ```
+///
+/// This generates:
+/// ```ignore
+/// #[must_use]
+/// pub fn is_running(&self) -> bool {
+///     self.has_state(&["RUNNING"])
+/// }
+/// // ... etc
+/// ```
+macro_rules! define_state_checkers {
+    ($($method:ident => [$($state:literal),+ $(,)?]),* $(,)?) => {
+        $(
+            #[must_use]
+            pub fn $method(&self) -> bool {
+                self.has_state(&[$($state),+])
+            }
+        )*
+    }
+}
+
+// Make the macro available to other modules in this crate
+pub(crate) use define_state_checkers;
 
 // ============================================================================
 // Job State Priority
@@ -124,21 +168,31 @@ pub const NODE_STATE_PRIORITY: &[(&str, &[&str])] = &[
 /// This is the authoritative representation of job states used throughout
 /// the codebase. It consolidates what was previously duplicated between
 /// `models::JobInfo` (using `Vec<String>`) and `tui::app::JobState`.
+///
+/// This enum covers all Slurm **base** job states. Job **flags** (like CONFIGURING,
+/// REQUEUED, etc.) are handled separately via the `is_*()` methods on `JobInfo`.
+/// See: https://slurm.schedmd.com/job_state_codes.html
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JobState {
     #[default]
     Unknown,
-    Pending,
+    // Active states
     Running,
+    Pending,
+    Suspended,
+    // Transitional flag (commonly shown instead of base state)
     Completing,
+    // Successful completion
     Completed,
+    // Termination states
+    Cancelled,
     Failed,
     Timeout,
-    OutOfMemory,
-    Cancelled,
-    NodeFail,
-    Suspended,
     Preempted,
+    NodeFail,
+    BootFail,
+    Deadline,
+    OutOfMemory,
 }
 
 impl JobState {
@@ -146,20 +200,10 @@ impl JobState {
     #[allow(dead_code)]
     #[must_use]
     pub fn from_slurm_state(states: &[String]) -> Self {
-        match states.first().and_then(|s| s.split_whitespace().next()) {
-            Some("PENDING") => Self::Pending,
-            Some("RUNNING") => Self::Running,
-            Some("COMPLETING") => Self::Completing,
-            Some("COMPLETED") => Self::Completed,
-            Some("FAILED") => Self::Failed,
-            Some("TIMEOUT") => Self::Timeout,
-            Some("OUT_OF_MEMORY") => Self::OutOfMemory,
-            Some("CANCELLED") => Self::Cancelled,
-            Some("NODE_FAIL") => Self::NodeFail,
-            Some("SUSPENDED") => Self::Suspended,
-            Some("PREEMPTED") => Self::Preempted,
-            _ => Self::Unknown,
-        }
+        states
+            .first()
+            .map(|s| Self::from_state_string(s))
+            .unwrap_or_default()
     }
 
     /// Create a JobState from a single state string.
@@ -169,17 +213,23 @@ impl JobState {
     #[must_use]
     pub fn from_state_string(state: &str) -> Self {
         match state.split_whitespace().next() {
-            Some("PENDING") | Some("PD") => Self::Pending,
+            // Active states
             Some("RUNNING") | Some("R") => Self::Running,
+            Some("PENDING") | Some("PD") => Self::Pending,
+            Some("SUSPENDED") | Some("S") => Self::Suspended,
+            // Transitional flag
             Some("COMPLETING") | Some("CG") => Self::Completing,
+            // Successful completion
             Some("COMPLETED") | Some("CD") => Self::Completed,
+            // Termination states
+            Some("CANCELLED") | Some("CA") => Self::Cancelled,
             Some("FAILED") | Some("F") => Self::Failed,
             Some("TIMEOUT") | Some("TO") => Self::Timeout,
-            Some("OUT_OF_MEMORY") | Some("OOM") => Self::OutOfMemory,
-            Some("CANCELLED") | Some("CA") => Self::Cancelled,
-            Some("NODE_FAIL") | Some("NF") => Self::NodeFail,
-            Some("SUSPENDED") | Some("S") => Self::Suspended,
             Some("PREEMPTED") | Some("PR") => Self::Preempted,
+            Some("NODE_FAIL") | Some("NF") => Self::NodeFail,
+            Some("BOOT_FAIL") | Some("BF") => Self::BootFail,
+            Some("DEADLINE") | Some("DL") => Self::Deadline,
+            Some("OUT_OF_MEMORY") | Some("OOM") => Self::OutOfMemory,
             _ => Self::Unknown,
         }
     }
@@ -188,18 +238,20 @@ impl JobState {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Pending => "PENDING",
+            Self::Unknown => "UNKNOWN",
             Self::Running => "RUNNING",
+            Self::Pending => "PENDING",
+            Self::Suspended => "SUSPENDED",
             Self::Completing => "COMPLETING",
             Self::Completed => "COMPLETED",
+            Self::Cancelled => "CANCELLED",
             Self::Failed => "FAILED",
             Self::Timeout => "TIMEOUT",
-            Self::OutOfMemory => "OOM",
-            Self::Cancelled => "CANCELLED",
-            Self::NodeFail => "NODE_FAIL",
-            Self::Suspended => "SUSPENDED",
             Self::Preempted => "PREEMPTED",
-            Self::Unknown => "UNKNOWN",
+            Self::NodeFail => "NODE_FAIL",
+            Self::BootFail => "BOOT_FAIL",
+            Self::Deadline => "DEADLINE",
+            Self::OutOfMemory => "OUT_OF_MEMORY",
         }
     }
 
@@ -207,18 +259,20 @@ impl JobState {
     #[must_use]
     pub fn short_str(&self) -> &'static str {
         match self {
-            Self::Pending => "PD",
+            Self::Unknown => "?",
             Self::Running => "RUN",
+            Self::Pending => "PD",
+            Self::Suspended => "SUSP",
             Self::Completing => "CG",
             Self::Completed => "CD",
+            Self::Cancelled => "CA",
             Self::Failed => "FAIL",
             Self::Timeout => "TO",
-            Self::OutOfMemory => "OOM",
-            Self::Cancelled => "CA",
-            Self::NodeFail => "NF",
-            Self::Suspended => "SUSP",
             Self::Preempted => "PR",
-            Self::Unknown => "?",
+            Self::NodeFail => "NF",
+            Self::BootFail => "BF",
+            Self::Deadline => "DL",
+            Self::OutOfMemory => "OOM",
         }
     }
 }

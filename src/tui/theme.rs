@@ -168,9 +168,12 @@ impl Theme {
             JobState::Running | JobState::Completing => self.running,
             JobState::Pending | JobState::Suspended => self.pending,
             JobState::Completed => self.completed,
-            JobState::Failed | JobState::OutOfMemory | JobState::NodeFail => self.failed,
+            JobState::Failed
+            | JobState::OutOfMemory
+            | JobState::NodeFail
+            | JobState::BootFail => self.failed,
             JobState::Cancelled | JobState::Preempted => self.cancelled,
-            JobState::Timeout => self.timeout,
+            JobState::Timeout | JobState::Deadline => self.timeout,
             JobState::Unknown => self.fg,
         }
     }
