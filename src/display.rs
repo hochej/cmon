@@ -636,26 +636,24 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
         output.push_str(&format!("{}\n", pad_line(&mem_line)));
 
         // GPU stats (shown only if partition has GPUs)
-        let total_gpus: u32 = nodes.iter().map(|n| n.gpu_info().total).sum();
-        if total_gpus > 0 {
-            let used_gpus: u32 = nodes.iter().map(|n| n.gpu_info().used).sum();
-            let gpu_util = if total_gpus > 0 {
-                (used_gpus as f64 / total_gpus as f64) * 100.0
-            } else {
-                0.0
-            };
-
-            let gpu_type = nodes
-                .iter()
-                .find_map(|n| {
-                    let info = n.gpu_info();
-                    if !info.gpu_type.is_empty() {
-                        Some(info.gpu_type.to_uppercase())
-                    } else {
+        // Collect all GPU info in a single pass to avoid calling gpu_info() multiple times per node
+        let (total_gpus, used_gpus, gpu_type) = nodes.iter().fold(
+            (0u32, 0u32, None::<String>),
+            |(total, used, gtype), node| {
+                let info = node.gpu_info();
+                let new_gtype = gtype.or_else(|| {
+                    if info.gpu_type.is_empty() {
                         None
+                    } else {
+                        Some(info.gpu_type.to_uppercase())
                     }
-                })
-                .unwrap_or_else(|| "GPU".to_string());
+                });
+                (total + info.total, used + info.used, new_gtype)
+            },
+        );
+        if total_gpus > 0 {
+            let gpu_util = (used_gpus as f64 / total_gpus as f64) * 100.0;
+            let gpu_type = gpu_type.unwrap_or_else(|| "GPU".to_string());
 
             let gpu_bar = create_bar(gpu_util);
             let gpu_line = format!(
