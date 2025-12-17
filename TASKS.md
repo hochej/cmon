@@ -383,11 +383,31 @@ where
 
 **Savings:** ~60 lines of duplicated command execution/parsing code
 
-### 3.2 DRY Watch Loop in main.rs
+### 3.2 DRY Watch Loop in main.rs [DONE]
 
 **Problem:** Watch loop pattern repeated 6 times for different commands.
 
-**Fix:** Create helper function:
+**Solution:** Created `run_with_optional_watch` helper function that reuses the existing
+`watch_loop` for watch mode and adds a simple "run once" branch:
+
+```rust
+fn run_with_optional_watch<F>(watch: f64, render_fn: F) -> Result<()>
+where
+    F: Fn() -> Result<String>,
+{
+    if watch > 0.0 {
+        watch_loop(watch, render_fn)
+    } else {
+        println!("{}", render_fn()?);
+        Ok(())
+    }
+}
+```
+
+Refactored all 6 commands (Jobs, Nodes, Status, Partitions, Me, Down) to use this helper,
+eliminating ~36 lines of duplicated if/else boilerplate.
+
+**Original proposed fix:**
 ```rust
 fn run_with_optional_watch<F>(
     watch: bool,
