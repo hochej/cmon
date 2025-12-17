@@ -31,25 +31,21 @@ pub struct SystemConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct RefreshConfig {
     /// Jobs refresh interval in seconds
-    #[serde(default = "default_jobs_interval")]
     pub jobs_interval: u64,
 
     /// Nodes refresh interval in seconds
-    #[serde(default = "default_nodes_interval")]
     pub nodes_interval: u64,
 
     /// Fairshare refresh interval in seconds
-    #[serde(default = "default_fairshare_interval")]
     pub fairshare_interval: u64,
 
     /// Enable idle slowdown
-    #[serde(default = "default_true")]
     pub idle_slowdown: bool,
 
     /// Seconds before considered idle
-    #[serde(default = "default_idle_threshold")]
     pub idle_threshold: u64,
 }
 
@@ -195,6 +191,10 @@ pub struct DisplayConfig {
     /// Example: "demu4x" would turn "demu4xcpu01" into "cpu01"
     #[serde(default)]
     pub node_prefix_strip: String,
+
+    /// Maximum length for job names before truncation (default: 35)
+    #[serde(default = "default_job_name_max_length")]
+    pub job_name_max_length: usize,
 }
 
 impl Default for DisplayConfig {
@@ -206,6 +206,7 @@ impl Default for DisplayConfig {
             theme: "dark".to_string(),
             partition_order: Vec::new(),
             node_prefix_strip: String::new(),
+            job_name_max_length: default_job_name_max_length(),
         }
     }
 }
@@ -250,6 +251,9 @@ fn default_view() -> String {
 }
 fn default_theme() -> String {
     "dark".to_string()
+}
+fn default_job_name_max_length() -> usize {
+    35
 }
 
 impl TuiConfig {
