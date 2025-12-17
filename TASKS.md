@@ -454,18 +454,23 @@ Removed methods and types marked `#[allow(dead_code)]` that were "kept for poten
 
 ## Phase 4: Split tui/app.rs into Submodules
 
-### 4.1 Create Module Structure
+### 4.1 Create Module Structure [DONE]
 
-**From:** `src/tui/app.rs` (2,768 lines)
-**To:** `src/tui/app/` directory
+Split `src/tui/app.rs` (2,653 lines) into `src/tui/app/` directory with logical separation:
 
-| New File | Contents | Est. Lines |
-|----------|----------|------------|
-| `mod.rs` | App struct, handle_input, handle_data | ~800 |
-| `state.rs` | ListState, ModalState, ViewState, *ViewState types | ~400 |
-| `types.rs` | TuiJobInfo, JobId, SlurmTime, PartitionStatus | ~300 |
-| `export.rs` | Exportable trait, export functions | ~200 |
-| `filter.rs` | Filter types, job_matches_* functions | ~150 |
+| New File | Contents | Lines |
+|----------|----------|-------|
+| `mod.rs` | App struct, handle_input, handle_data, re-exports | ~850 |
+| `state.rs` | ListState, ModalState, ViewState, *ViewState types, DataCache, FeedbackState | ~600 |
+| `types.rs` | TuiJobInfo, JobId, SlurmTime, PartitionStatus, DataSlice | ~350 |
+| `export.rs` | escape_csv helper | ~40 |
+| `filter.rs` | job_matches_* functions with comprehensive tests | ~170 |
+
+**Key decisions:**
+- Export methods remain on App (need access to feedback state)
+- Filter functions extracted as standalone (pure functions)
+- JobsViewState gains `new()` constructor to handle private fields
+- All 85 tests pass, clippy clean
 
 ### 4.2 Consolidate Selection Accessors
 
