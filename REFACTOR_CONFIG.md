@@ -44,12 +44,11 @@
  - Add #[serde(default)] at struct level
  - Remove field-level #[serde(default)]
 
- Step 5: Refactor TuiConfig
+ Step 5: Refactor TuiConfig [DONE]
 
- - Remove Default from derive macro
+ - Keep #[derive(Default)] (clippy: derivable_impls - all fields impl Default)
  - Add #[serde(default)] at struct level
  - Remove all field-level #[serde(default)]
- - Add manual impl Default calling nested defaults
 
  Step 6: Delete All default_* Functions
 
