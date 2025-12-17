@@ -27,6 +27,8 @@ impl ThemeName {
 /// Color theme for the TUI
 #[derive(Debug, Clone)]
 pub struct Theme {
+    /// Theme identifier (used in Debug output and tests to verify factory methods)
+    #[allow(dead_code)]
     pub name: ThemeName,
 
     // Base colors

@@ -766,29 +766,47 @@ fn build_styled_table<T: Tabled>(rows: Vec<T>, max_width: usize) -> String {
 
 ## Phase 7: TUI Support Files Cleanup
 
-### 7.1 Simplify TerminalCapabilities (tui/mod.rs)
+### 7.1 Simplify TerminalCapabilities (tui/mod.rs) [DONE]
 
-Replace 50-line struct with simple function:
+Made `TerminalCapabilities` struct and its methods private (module-internal only).
 
-```rust
-fn check_terminal_capabilities() -> (bool, bool) {
-    let is_tty = std::io::stdout().is_terminal();
-    let term = std::env::var("TERM").unwrap_or_default();
-    let supports_alt_screen = !term.contains("dumb") && !term.is_empty();
-    (is_tty, supports_alt_screen)
-}
-```
+**Decision:** Kept the struct rather than replacing with a simple function because it provides
+valuable context-aware error messages that help users troubleshoot terminal issues. The proposed
+tuple-returning function would lose this information. Making it private (removing `pub`) is the
+appropriate simplification since it's only used within `tui/mod.rs`.
 
-### 7.2 Make Scheduler Stats Fetcher Consistent (tui/runtime.rs)
+**Changes:**
+- Removed `pub` from struct definition
+- Removed `pub` from all three methods (`detect`, `is_suitable`, `error_message`)
+- Struct is now module-internal only
 
-Use `handle_fetch_result` helper like other fetchers.
+### 7.2 Make Scheduler Stats Fetcher Consistent (tui/runtime.rs) [DONE]
 
-### 7.3 Audit Dead Code
+Refactored `fetch_and_send_scheduler_stats` to use the `handle_fetch_result` helper like other
+fetchers, improving consistency across the codebase.
 
-Remove unused variants:
-- `InputEvent::Resize` (if truly unused)
-- `DataSource::Partitions` (if truly unused)
-- `Theme::name`, `Theme::bg`, `Theme::progress_empty`
+**Changes:**
+- Wrapped `get_scheduler_stats()` result in `Ok()` to match the helper's expected type signature
+- Replaced ~30 lines of manual match handling with single `handle_fetch_result` call
+- Added comment explaining why the result is wrapped (scheduler stats returns value directly,
+  not Result)
+
+### 7.3 Audit Dead Code [DONE]
+
+Reviewed dead code annotations across the codebase. Made targeted fixes:
+
+**Fixed:**
+- Removed incorrect `#[allow(dead_code)]` from `InputEvent::Resize` - the variant IS used
+  (constructed in `runtime.rs`, triggers re-render). Updated doc comment to clarify its purpose.
+- Added proper `#[allow(dead_code)]` annotation to `Theme::name` field with doc comment explaining
+  it's used for Debug output and test verification.
+- Fixed clippy warning: changed `sort_by` to `sort_by_key` in `display.rs:592`.
+
+**Kept as-is (intentional):**
+- `DataSource::Partitions` - already removed in Phase 3.3
+- `Theme::bg`, `Theme::progress_empty` - already removed in Phase 3.3
+- Unused re-exports in mod.rs files - kept for API stability
+- Macro-generated `is_*` methods - kept for API completeness (all Slurm states covered)
 
 ---
 

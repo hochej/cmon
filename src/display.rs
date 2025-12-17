@@ -589,7 +589,7 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
         .keys()
         .filter(|k| !ordered_names.iter().any(|o| o.eq_ignore_ascii_case(k)))
         .collect();
-    remaining.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    remaining.sort_by_key(|a| a.to_lowercase());
     for name in remaining {
         ordered_names.push(name.clone());
     }

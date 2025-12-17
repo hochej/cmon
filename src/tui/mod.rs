@@ -37,15 +37,15 @@ use crate::tui::runtime::{
 
 /// Terminal capability requirements for TUI mode
 #[derive(Debug)]
-pub struct TerminalCapabilities {
-    pub is_tty: bool,
-    pub term_type: String,
-    pub supports_alternate_screen: bool,
+struct TerminalCapabilities {
+    is_tty: bool,
+    term_type: String,
+    supports_alternate_screen: bool,
 }
 
 impl TerminalCapabilities {
     /// Detect terminal capabilities
-    pub fn detect() -> Self {
+    fn detect() -> Self {
         let is_tty = stdout().is_terminal();
         let term_type = std::env::var("TERM").unwrap_or_default();
 
@@ -61,13 +61,13 @@ impl TerminalCapabilities {
 
     /// Check if terminal is suitable for TUI mode
     #[must_use]
-    pub fn is_suitable(&self) -> bool {
+    fn is_suitable(&self) -> bool {
         self.is_tty && self.supports_alternate_screen
     }
 
     /// Get error message for unsuitable terminal
     #[must_use]
-    pub fn error_message(&self) -> String {
+    fn error_message(&self) -> String {
         if !self.is_tty {
             "TUI mode requires an interactive terminal (stdout is not a TTY).\n\
              Hint: Use non-TUI commands like 'cmon jobs' or 'cmon status' instead."

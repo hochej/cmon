@@ -13,8 +13,7 @@ pub enum InputEvent {
     Key(KeyEvent),
     /// Mouse input (optional feature)
     Mouse(MouseEvent),
-    /// Terminal resize
-    #[allow(dead_code)]
+    /// Terminal resize (constructed in runtime.rs, triggers re-render)
     Resize(u16, u16),
 }
 
