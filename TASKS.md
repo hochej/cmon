@@ -270,6 +270,38 @@ impl JobInfo {
 
 **Savings:** ~100 lines (2 methods x 50 lines each)
 
+### 2.2b Add `define_state_checkers!` Macro for is_* Methods [DONE]
+
+Added declarative macro to generate all `is_*()` state checking methods from a single
+definition, eliminating ~50 repetitive methods across JobInfo, NodeInfo, and JobHistoryInfo:
+
+```rust
+// In models/state.rs
+macro_rules! define_state_checkers {
+    ($($method:ident => [$($state:literal),+ $(,)?]),* $(,)?) => {
+        $(
+            #[must_use]
+            pub fn $method(&self) -> bool {
+                self.has_state(&[$($state),+])
+            }
+        )*
+    }
+}
+
+// Usage in job.rs, node.rs:
+define_state_checkers! {
+    is_running => ["RUNNING"],
+    is_pending => ["PENDING"],
+    is_draining => ["DRAINING", "DRAIN", "DRNG"],
+    // ... comprehensive list of all Slurm states
+}
+```
+
+Also extended `JobState` enum with `BootFail` and `Deadline` variants for complete
+Slurm base state coverage.
+
+**Savings:** ~140 lines (net reduction)
+
 ### 2.3 Extract Config Validation Helper
 
 ```rust
