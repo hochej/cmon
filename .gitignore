@@ -11,6 +11,8 @@ Cargo.lock
 
 # Claude Code
 .claude/
+TASKS.md
+REVIEW_TODO.md
 
 # OS files
 .DS_Store
