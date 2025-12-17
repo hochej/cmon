@@ -302,21 +302,37 @@ Slurm base state coverage.
 
 **Savings:** ~140 lines (net reduction)
 
-### 2.3 Extract Config Validation Helper
+### 2.3 Extract Config Validation Helper [DONE]
+
+Extracted `validate_interval()` helper function with a type-safe `RefreshField` enum
+to reduce repetitive validation code in `RefreshConfig::validate()`. Uses an enum
+instead of string literals for compile-time field name verification:
 
 ```rust
 // In models/config.rs
+#[derive(Clone, Copy)]
+enum RefreshField {
+    JobsInterval,
+    NodesInterval,
+    FairshareInterval,
+    IdleThreshold,
+}
+
 fn validate_interval(
     value: &mut u64,
-    field_name: &str,
+    field: RefreshField,  // Type-safe instead of &str
     min: u64,
     default: u64,
     strict: bool,
     warnings: &mut Vec<String>,
 ) -> Result<(), String> { ... }
+
+// Usage (replaces 4 repetitive blocks):
+validate_interval(&mut self.jobs_interval, RefreshField::JobsInterval, ...)?;
+validate_interval(&mut self.nodes_interval, RefreshField::NodesInterval, ...)?;
 ```
 
-**Savings:** ~30 lines
+**Benefits:** Type-safe field names, compile-time verification, improved maintainability
 
 ---
 

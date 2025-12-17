@@ -71,6 +71,52 @@ const MIN_REFRESH_INTERVAL: u64 = 1;
 /// Minimum idle threshold in seconds
 const MIN_IDLE_THRESHOLD: u64 = 1;
 
+/// Fields in RefreshConfig that require interval validation.
+#[derive(Clone, Copy)]
+enum RefreshField {
+    JobsInterval,
+    NodesInterval,
+    FairshareInterval,
+    IdleThreshold,
+}
+
+impl RefreshField {
+    /// Returns the config path for error messages (e.g., "refresh.jobs_interval").
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::JobsInterval => "jobs_interval",
+            Self::NodesInterval => "nodes_interval",
+            Self::FairshareInterval => "fairshare_interval",
+            Self::IdleThreshold => "idle_threshold",
+        }
+    }
+}
+
+/// Validate that an interval value meets the minimum requirement.
+/// In non-strict mode, corrects invalid values to the default and adds a warning.
+/// In strict mode, returns an error for invalid values.
+fn validate_interval(
+    value: &mut u64,
+    field: RefreshField,
+    min: u64,
+    default: u64,
+    strict: bool,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    if *value < min {
+        let field_name = field.as_str();
+        let msg = format!(
+            "refresh.{field_name} must be at least {min} second(s), got {value}",
+        );
+        if strict {
+            return Err(msg);
+        }
+        warnings.push(format!("{msg} - using default ({default})"));
+        *value = default;
+    }
+    Ok(())
+}
+
 impl RefreshConfig {
     /// Validate refresh configuration values.
     /// Returns a list of warnings for invalid values that were corrected to defaults.
@@ -79,59 +125,43 @@ impl RefreshConfig {
         let mut warnings = Vec::new();
         let defaults = Self::default();
 
-        // Validate jobs_interval
-        if self.jobs_interval < MIN_REFRESH_INTERVAL {
-            let msg = format!(
-                "refresh.jobs_interval must be at least {} second(s), got {}",
-                MIN_REFRESH_INTERVAL, self.jobs_interval
-            );
-            if strict {
-                return Err(msg);
-            }
-            warnings.push(format!("{} - using default ({})", msg, defaults.jobs_interval));
-            self.jobs_interval = defaults.jobs_interval;
-        }
+        validate_interval(
+            &mut self.jobs_interval,
+            RefreshField::JobsInterval,
+            MIN_REFRESH_INTERVAL,
+            defaults.jobs_interval,
+            strict,
+            &mut warnings,
+        )?;
 
-        // Validate nodes_interval
-        if self.nodes_interval < MIN_REFRESH_INTERVAL {
-            let msg = format!(
-                "refresh.nodes_interval must be at least {} second(s), got {}",
-                MIN_REFRESH_INTERVAL, self.nodes_interval
-            );
-            if strict {
-                return Err(msg);
-            }
-            warnings.push(format!("{} - using default ({})", msg, defaults.nodes_interval));
-            self.nodes_interval = defaults.nodes_interval;
-        }
+        validate_interval(
+            &mut self.nodes_interval,
+            RefreshField::NodesInterval,
+            MIN_REFRESH_INTERVAL,
+            defaults.nodes_interval,
+            strict,
+            &mut warnings,
+        )?;
 
-        // Validate fairshare_interval
-        if self.fairshare_interval < MIN_REFRESH_INTERVAL {
-            let msg = format!(
-                "refresh.fairshare_interval must be at least {} second(s), got {}",
-                MIN_REFRESH_INTERVAL, self.fairshare_interval
-            );
-            if strict {
-                return Err(msg);
-            }
-            warnings.push(format!(
-                "{} - using default ({})",
-                msg, defaults.fairshare_interval
-            ));
-            self.fairshare_interval = defaults.fairshare_interval;
-        }
+        validate_interval(
+            &mut self.fairshare_interval,
+            RefreshField::FairshareInterval,
+            MIN_REFRESH_INTERVAL,
+            defaults.fairshare_interval,
+            strict,
+            &mut warnings,
+        )?;
 
-        // Validate idle_threshold (only relevant if idle_slowdown is enabled)
-        if self.idle_slowdown && self.idle_threshold < MIN_IDLE_THRESHOLD {
-            let msg = format!(
-                "refresh.idle_threshold must be at least {} second(s), got {}",
-                MIN_IDLE_THRESHOLD, self.idle_threshold
-            );
-            if strict {
-                return Err(msg);
-            }
-            warnings.push(format!("{} - using default ({})", msg, defaults.idle_threshold));
-            self.idle_threshold = defaults.idle_threshold;
+        // idle_threshold only validated if idle_slowdown is enabled
+        if self.idle_slowdown {
+            validate_interval(
+                &mut self.idle_threshold,
+                RefreshField::IdleThreshold,
+                MIN_IDLE_THRESHOLD,
+                defaults.idle_threshold,
+                strict,
+                &mut warnings,
+            )?;
         }
 
         Ok(warnings)
