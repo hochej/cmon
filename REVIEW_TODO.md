@@ -26,8 +26,16 @@ Commits ahead of `master`:
   - New helpers (`build_job_basic_info`, `build_job_time_info`, etc.) are private and logically consistent.
   - `wrap_text_smart` logic for line wrapping looks correct.
   - Greatly improves readability of the display logic.
-- [ ] 2ce387d refactor: replace stringly-typed color API with BoxColor enum (Phase 6.1)
-- [ ] 3031de3 refactor: decompose render_job_detail_popup into section builders (Phase 5.5)
+- [x] 2ce387d refactor: replace stringly-typed color API with BoxColor enum (Phase 6.1)
+  - Reviewed. Logic is sound.
+  - Replaced string literals with `BoxColor` enum, improving type safety.
+  - `BoxColor::apply` correctly handles color application.
+  - Logic change in `pad_line_colored` correctly enables Yellow/Blue support (previously defaulted to Blue), though currently unused.
+- [x] 3031de3 refactor: decompose render_job_detail_popup into section builders (Phase 5.5)
+  - Reviewed. Logic is sound.
+  - Correctly extracts logic into 6 focused helper functions (`build_job_header_section`, `build_time_section`, etc.).
+  - Lifetime handling (`'a` for borrowed strings, `'static` for formatted/owned strings) is correct and safe.
+  - Improves readability of `render_job_detail_popup` significantly (280 -> 45 lines).
 - [ ] 421f696 refactor: unify personal jobs panels with shared function (Phase 5.4)
 - [ ] 32024f7 refactor: unify problem nodes rendering with shared function (Phase 5.3)
 - [ ] 5674c9e refactor: add section_header() and detail_row() helpers to widgets.rs (Phase 5.2)
