@@ -184,19 +184,9 @@ impl App {
 
             // Actions
             KeyAction::Select => {
-                // Open detail view for selected item, or toggle array collapse
-                if self.current_view == View::Jobs {
-                    if self.selected_job().is_some() {
-                        // Always show job detail view
-                        self.modal = ModalState::Detail;
-                    }
-                } else if self.current_view == View::Personal {
-                    // Allow job detail view from Personal view
-                    if self.personal_running_job().is_some()
-                        || self.personal_pending_job().is_some()
-                    {
-                        self.modal = ModalState::Detail;
-                    }
+                // Open detail view for selected job (works from Jobs or Personal view)
+                if self.focused_job().is_some() {
+                    self.modal = ModalState::Detail;
                 }
                 EventResult::Continue
             }
@@ -504,8 +494,8 @@ impl App {
                 EventResult::Continue
             }
             KeyAction::Cancel => {
-                // Allow initiating cancel from detail view
-                if let Some(job) = self.selected_job() {
+                // Allow initiating cancel from detail view (works from Jobs or Personal view)
+                if let Some(job) = self.focused_job() {
                     let confirm_action = if job.is_array_job() {
                         ConfirmAction::CancelJobArray {
                             base_job_id: job.job_id.base_id.get(),
@@ -585,9 +575,9 @@ impl App {
         });
     }
 
-    /// Copy selected job ID to clipboard
+    /// Copy focused job ID to clipboard (works from Jobs or Personal view)
     fn yank_selected_job_id(&mut self) {
-        if let Some(job) = self.selected_job() {
+        if let Some(job) = self.focused_job() {
             let job_id_str = job.job_id.to_string();
 
             // Try using xclip, xsel, or pbcopy depending on platform
@@ -1009,24 +999,19 @@ impl App {
         }
     }
 
-    /// Get the job to show in detail view (works from Jobs or Personal view)
+    /// Get the currently focused job across any view where a job can be selected
+    ///
+    /// This is the unified accessor that consolidates:
+    /// - `selected_job()` (Jobs view)
+    /// - `personal_running_job()` (Personal view, Running panel)
+    /// - `personal_pending_job()` (Personal view, Pending panel)
+    ///
+    /// Use this method when you need the selected job regardless of which view is active.
     #[must_use]
-    pub fn detail_job(&self) -> Option<&TuiJobInfo> {
+    pub fn focused_job(&self) -> Option<&TuiJobInfo> {
         match self.current_view {
             View::Jobs => self.selected_job(),
-            View::Personal => match self.personal_view.selected_panel {
-                PersonalPanel::Running => {
-                    let jobs = self.my_running_jobs();
-                    let idx = self.personal_view.running_jobs_state.selected;
-                    jobs.get(idx).copied()
-                }
-                PersonalPanel::Pending => {
-                    let jobs = self.my_pending_jobs();
-                    let idx = self.personal_view.pending_jobs_state.selected;
-                    jobs.get(idx).copied()
-                }
-                PersonalPanel::Fairshare | PersonalPanel::Summary => None,
-            },
+            View::Personal => self.personal_running_job().or_else(|| self.personal_pending_job()),
             _ => None,
         }
     }

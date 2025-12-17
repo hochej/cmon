@@ -472,24 +472,31 @@ Split `src/tui/app.rs` (2,653 lines) into `src/tui/app/` directory with logical 
 - JobsViewState gains `new()` constructor to handle private fields
 - All 85 tests pass, clippy clean
 
-### 4.2 Consolidate Selection Accessors
+### 4.2 Consolidate Selection Accessors [DONE]
+
+Renamed `detail_job()` to `focused_job()` and refactored to use the existing helper methods
+instead of duplicating code. The new unified accessor consolidates:
+- `selected_job()` (Jobs view)
+- `personal_running_job()` (Personal view, Running panel)
+- `personal_pending_job()` (Personal view, Pending panel)
 
 ```rust
-// Replace 4 overlapping methods with one
+/// Get the currently focused job across any view where a job can be selected
 pub fn focused_job(&self) -> Option<&TuiJobInfo> {
-    match self.view {
-        View::Jobs => self.jobs_view_selected_job(),
-        View::Personal => match self.personal_view_state.active_panel {
-            PersonalPanel::Running => self.personal_running_selected(),
-            PersonalPanel::Pending => self.personal_pending_selected(),
-            _ => None,
-        },
+    match self.current_view {
+        View::Jobs => self.selected_job(),
+        View::Personal => self.personal_running_job().or_else(|| self.personal_pending_job()),
         _ => None,
     }
 }
 ```
 
-**Savings:** ~40 lines
+**Additional fixes:**
+- Fixed bug in `handle_detail_action`: Cancel from detail view now works when opened from Personal view
+- `yank_selected_job_id()` now uses `focused_job()`, enabling clipboard copy from Personal view
+- Simplified `KeyAction::Select` handler from 15 lines to 4 lines
+
+**Savings:** ~20 lines (code reduction) + 1 bug fix
 
 ### 4.3 Implement Exportable Trait
 

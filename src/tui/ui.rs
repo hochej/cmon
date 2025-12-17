@@ -2050,8 +2050,8 @@ fn render_job_detail_popup(app: &App, frame: &mut Frame, area: Rect, theme: &The
     let popup_area = centered_rect(75, 80, area);
     frame.render_widget(Clear, popup_area);
 
-    // Get job from Jobs view or Personal view
-    let Some(job) = app.detail_job() else {
+    // Get the focused job (works from Jobs view or Personal view)
+    let Some(job) = app.focused_job() else {
         return;
     };
 
