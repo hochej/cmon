@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 
 use crate::models::{FairshareNode, JobState, NodeInfo, TuiConfig};
 use crate::tui::event::{DataEvent, EventResult, InputEvent, KeyAction};
+use crate::utils::find_partition_key;
 
 /// Main application state
 ///
@@ -881,11 +882,7 @@ impl App {
 
         // First add configured partitions in order (case-insensitive match)
         for config_name in partition_order {
-            // Find the actual partition key that matches case-insensitively
-            if let Some(actual_name) = partition_map
-                .keys()
-                .find(|k| k.eq_ignore_ascii_case(config_name))
-                .cloned()
+            if let Some(actual_name) = find_partition_key(partition_map.keys(), config_name).cloned()
             {
                 if let Some(nodes) = partition_map.remove(&actual_name) {
                     stats.push(compute_partition_from_nodes(&actual_name, &nodes));

@@ -5,6 +5,7 @@ pub mod formatting;
 mod models;
 mod slurm;
 mod tui;
+mod utils;
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};

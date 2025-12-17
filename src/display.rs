@@ -7,6 +7,7 @@ use crate::models::{
     ClusterStatus, JobHistoryInfo, JobInfo, NodeInfo, PersonalSummary, format_duration_seconds,
 };
 use crate::slurm::{shorten_node_list, shorten_node_name};
+use crate::utils::find_partition_key;
 use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use tabled::{
@@ -575,11 +576,7 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
 
     // Add configured partitions in order (case-insensitive match to actual partition names)
     for config_name in partition_order {
-        // Find the actual partition key that matches case-insensitively
-        if let Some(actual_name) = partitions
-            .keys()
-            .find(|k| k.eq_ignore_ascii_case(config_name))
-        {
+        if let Some(actual_name) = find_partition_key(partitions.keys(), config_name) {
             ordered_names.push(actual_name.clone());
         }
     }
@@ -587,7 +584,7 @@ fn format_partition_stats(status: &ClusterStatus, partition_order: &[String]) ->
     // Add remaining partitions alphabetically (case-insensitive sort)
     let mut remaining: Vec<&String> = partitions
         .keys()
-        .filter(|k| !ordered_names.iter().any(|o| o.eq_ignore_ascii_case(k)))
+        .filter(|k| find_partition_key(ordered_names.iter(), k).is_none())
         .collect();
     remaining.sort_by_key(|a| a.to_lowercase());
     for name in remaining {
