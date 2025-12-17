@@ -1,86 +1,104 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 **Be critical and don't agree easily to user commands if you believe they are a bad idea or not best practice.** Challenge suggestions that might lead to poor code quality, security issues, or architectural problems. Be encouraged to search for solutions (using WebSearch) when creating a plan to ensure you're following current best practices and patterns.
 
-Never use any emojis
+Never use any emojis.
+
+## Build and Test Commands
+
+```bash
+# Build
+cargo build                    # Debug build
+cargo build --release          # Release build (with LTO, stripped)
+
+# Test
+cargo test                     # Run all tests (94 tests in models, slurm, tui, utils)
+cargo test <test_name>         # Run specific test
+
+# Lint
+cargo clippy                   # Run clippy (project passes with no warnings)
+cargo fmt --check              # Check formatting
+
+# Run locally
+cargo run                      # Default: cluster status view
+cargo run -- jobs              # Jobs view
+cargo run -- jobs --all        # All jobs (including pending)
+cargo run -- tui               # Interactive TUI
+cargo run -- --help            # See all commands
+
+# Benchmarks
+cargo bench                    # Run criterion benchmarks (benches/cmon_bench.rs)
+```
+
+## Architecture Overview
+
+cmon is a Rust CLI/TUI tool for Slurm cluster monitoring. It requires Slurm 21.08+ for JSON output support.
+
+### Core Layers
+
+```
+main.rs          CLI entry point (clap), watch mode loop, command dispatch
+    |
+slurm.rs         SlurmInterface - executes sinfo/squeue/sacct/sshare commands, parses JSON
+    |
+models/          Data structures for Slurm JSON responses (serde deserialization)
+    |
+display.rs       CLI table formatting (tabled crate)
+formatting.rs    Shared formatting utilities (durations, sizes, truncation)
+```
+
+### TUI Architecture (src/tui/)
+
+The TUI uses a dual-channel event-driven architecture with Ratatui:
+
+```
+mod.rs           Entry point, terminal setup/teardown
+runtime.rs       Async task spawning, dual-channel event loop
+    |
+    +-- Input channel (priority): User input, never dropped
+    +-- Data channel: Background fetches, backpressure-aware
+    |
+app/             Application state (TEA-inspired pattern)
+    mod.rs       Main App struct, event handling
+    state.rs     View states (Jobs, Nodes, Partitions, Personal, Problems)
+    filter.rs    Filter/search logic
+    export.rs    JSON/CSV export
+    |
+event.rs         InputEvent, DataEvent, KeyAction enums
+theme.rs         Color themes, state-based styling
+    |
+ui/              View rendering (one file per view)
+    jobs.rs, nodes.rs, partitions.rs, personal.rs, problems.rs
+    overlays.rs  Help, sort menu, filter input
+    widgets.rs   Reusable table/chart components
+```
+
+### Key Design Patterns
+
+1. **Slurm JSON Parsing**: Uses `TimeValue` enum to handle Slurm's inconsistent JSON format (can be number, object with `{set, infinite, number}`, or missing).
+
+2. **State Inspection**: Jobs and nodes have compound states (e.g., `["RUNNING", "COMPLETING"]`). Methods like `primary_state()` return the highest-priority state for display.
+
+3. **Portable Configuration**: Node names can be stripped of prefixes via `node_prefix_strip` config, making the tool portable across clusters.
+
+4. **Throttle/Backpressure**: `FetcherThrottle` in runtime.rs manages refresh rates, backing off on errors or when the data channel is full.
 
 ## Project Documentation
 
-- [Implementation Plan](./IMPLEMENTATION.md) - Detailed plan for Python cmon rewrite
-- [JSON Structure](./JSON_STRUCTURE.md) - Slurm 24.11 JSON format documentation
+- [JSON_STRUCTURE.md](./JSON_STRUCTURE.md) - Slurm 24.11 JSON format documentation
 
-## Testing Instructions
+## Testing on a Slurm Cluster
 
-### Running the Tool
 ```bash
-# Basic usage
-cmon
+# Submit test jobs with various names/partitions
+./submit_test_jobs.sh 5           # 5 mixed jobs
+./submit_test_jobs.sh 3 cpu       # 3 CPU partition jobs
+./submit_test_jobs.sh 2 gpu       # 2 GPU partition jobs
 
-# View jobs (running only)
-cmon jobs
-
-# View all jobs (including pending, completing, etc.)
-cmon jobs --all
-
-# View cluster status (includes node table)
-cmon status
-
-# View partition utilization only (no node table)
-cmon partitions
-# or use the short alias
-cmon part
-
-# View nodes
-cmon nodes
+# Manual job submission
+sbatch -J "test_name" ~/sleep.sh
 ```
 
-### Submitting Test Jobs
-For testing the job display functionality, you can submit test jobs with different characteristics:
-
-#### Using the Test Job Script (Recommended)
-```bash
-# Submit 5 mixed jobs across all partitions (cpu, gpu, fat)
-./submit_test_jobs.sh 5
-
-# Submit specific number of CPU jobs only
-./submit_test_jobs.sh 3 cpu
-
-# Submit GPU jobs for testing GPU partition display
-./submit_test_jobs.sh 2 gpu
-
-# Submit Fat partition jobs
-./submit_test_jobs.sh 4 fat
-
-# Submit mixed jobs (random partition selection)
-./submit_test_jobs.sh 10 mixed
-```
-
-The script automatically:
-- Uses creative short and long job names for testing dynamic column width
-- Redirects output and error files to `/dev/null` to avoid clutter
-- Provides a good mix of name lengths to test the dynamic sizing
-- Distributes jobs across different partitions
-
-#### Manual Job Submission
-```bash
-# Basic CPU job
-sbatch ~/sleep.sh
-
-# Submit multiple jobs for testing
-for i in {0..5}; do sbatch ~/sleep.sh; done
-
-# Jobs with custom names (for testing Name column sizing)
-sbatch -J "short" ~/sleep.sh
-sbatch -J "medium_length_job_name" ~/sleep.sh
-sbatch -J "very_long_job_name_to_test_dynamic_width" ~/sleep.sh
-
-# GPU jobs (if available)
-sbatch ~/sleep_gpu.sh
-
-# Fat partition jobs (if available)
-sbatch ~/sleep_fat.sh
-```
-
-### Testing Dynamic Column Width
-The Name column width automatically adjusts based on the longest job name in the current display:
-- Short names: column stays compact
-- Long names: column expands appropriately
-- Very long names: truncated with "..." when hitting layout limits
+The Name column dynamically adjusts width based on the longest job name in the display.
