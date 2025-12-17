@@ -10,15 +10,14 @@ mod state;
 mod types;
 
 // Re-export public types
-pub use export::{escape_csv, export_items, Exportable};
-pub use filter::{job_matches_any_field, job_matches_field, job_matches_filter, job_matches_gpu};
+pub use export::export_items;
 pub use state::{
-    AccountContext, ActiveFilter, ClipboardFeedback, ConfirmAction, DataCache, ExportFormat,
-    FeedbackState, FilterType, JobSortColumn, JobsViewState, ListState, ModalState, NodesViewMode,
-    NodesViewState, PartitionsViewState, PersonalPanel, PersonalViewState, ProblemsPanel,
-    ProblemsViewState, SortMenuState, TimingState, View,
+    AccountContext, ClipboardFeedback, ConfirmAction, DataCache, ExportFormat, FeedbackState,
+    FilterType, JobSortColumn, JobsViewState, ListState, ModalState, NodesViewMode, NodesViewState,
+    PartitionsViewState, PersonalPanel, PersonalViewState, ProblemsPanel, ProblemsViewState,
+    SortMenuState, TimingState, View,
 };
-pub use types::{DataSlice, JobId, PartitionStatus, SlurmTime, TuiJobInfo};
+pub use types::{PartitionStatus, TuiJobInfo};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -848,12 +847,6 @@ impl App {
         }
     }
 
-    /// Check if error should still be displayed
-    #[must_use]
-    pub fn should_show_error(&self) -> bool {
-        self.feedback.should_show_error()
-    }
-
     /// Get the current error message if it should be shown
     #[must_use]
     pub fn current_error(&self) -> Option<&str> {
@@ -1086,12 +1079,6 @@ impl App {
         let jobs = self.data.jobs.as_slice();
         let indices = self.jobs_view.get_sorted_indices(jobs, &filter);
         indices.iter().map(|&i| &jobs[i]).collect()
-    }
-
-    /// Check if in a modal dialog
-    #[must_use]
-    pub fn is_modal_active(&self) -> bool {
-        self.modal.is_blocking()
     }
 
     /// Export current view data to a file

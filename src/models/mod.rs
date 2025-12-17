@@ -15,35 +15,27 @@ mod time;
 
 // Re-export formatting functions for backwards compatibility
 pub use crate::formatting::format_duration_human as format_duration_seconds;
-pub use crate::formatting::format_duration_human_minutes as format_duration_minutes;
 
 // Re-export all public types from submodules
-pub use config::{BehaviorConfig, DisplayConfig, RefreshConfig, SystemConfig, TuiConfig};
-pub use fairshare::{
-    FairshareNode, FlatFairshareRow, SshareEntry, SshareFairshare, SshareResponse, SshareTres,
-    SshareTresItem, SshareWrapper,
-};
-pub use job::{
-    CpuStatistics, ExitCodeInfo, JobAssociation, JobGpuInfo, JobHistoryInfo, JobHistoryState,
-    JobInfo, JobRequiredResources, JobStepInfo, JobStepStatistics, JobStepTimeInfo, JobTimeInfo,
-    JobTresInfo, MemoryMaxInfo, MemoryStatistics, MemoryTaskInfo, SignalInfo, StepId, StepIdInfo,
-    TasksInfo, TimeSeconds, TresItem,
-};
-pub use node::{
-    CpuInfo, FeatureInfo, GpuInfo, GresInfo, MemoryFreeInfo, MemoryInfo, MinMaxValue, NodeInfo,
-    NodeNames, NodeState, PartitionInfo, ReasonInfo,
-};
-pub use scheduler::{BackfillStats, CycleStats, SchedulerStats};
+pub use config::TuiConfig;
+pub use fairshare::{FairshareNode, FlatFairshareRow, SshareEntry, SshareResponse};
+pub use job::{JobHistoryInfo, JobInfo};
+pub use node::{NodeInfo, ReasonInfo};
+pub use scheduler::SchedulerStats;
 pub use slurm_responses::{
-    ClusterStatus, PersonalSummary, SacctResponse, SacctWarning, SinfoResponse, SlurmResponse,
-    SqueueResponse,
+    ClusterStatus, PersonalSummary, SacctResponse, SinfoResponse, SlurmResponse, SqueueResponse,
 };
 pub use state::JobState;
-pub use time::{FloatValue, TimeValue};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Import types not re-exported publicly but needed for tests
+    use super::node::{
+        CpuInfo, FeatureInfo, GresInfo, MemoryFreeInfo, MemoryInfo, MinMaxValue, NodeNames,
+        NodeState, PartitionInfo,
+    };
+    use super::time::TimeValue;
 
     // Helper to create a test node with specific states
     fn create_test_node(states: Vec<&str>) -> NodeInfo {
