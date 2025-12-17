@@ -534,21 +534,27 @@ pub fn export_items<T: Exportable>(items: &[T], format: ExportFormat) -> String 
 
 ## Phase 5: Split tui/ui.rs into Submodules
 
-### 5.1 Create Module Structure
+### 5.1 Create Module Structure [DONE]
 
-**From:** `src/tui/ui.rs` (2,567 lines)
-**To:** `src/tui/ui/` directory
+Split `src/tui/ui.rs` (2,532 lines) into `src/tui/ui/` directory with logical submodules:
 
-| New File | Contents | Est. Lines |
-|----------|----------|------------|
-| `mod.rs` | Main render(), dispatch to views | ~150 |
-| `jobs.rs` | Jobs view, job_to_row | ~300 |
-| `nodes.rs` | Nodes view (list + grid) | ~250 |
-| `partitions.rs` | Partitions cards | ~200 |
-| `personal.rs` | Personal dashboard (unified panels) | ~250 |
-| `problems.rs` | Problem nodes (unified down/draining) | ~150 |
-| `overlays.rs` | Help, filter, sort, confirm, detail popup | ~400 |
-| `widgets.rs` | Reusable helpers | ~150 |
+| New File | Contents | Lines |
+|----------|----------|-------|
+| `mod.rs` | Main render(), tab/info/status bar, dispatch | ~316 |
+| `widgets.rs` | Shared helpers (table header, scroll, progress bar) | ~62 |
+| `jobs.rs` | Jobs view (flat list, grouped-by-account), job_to_row | ~270 |
+| `nodes.rs` | Nodes view (list + grid modes), node detail footer | ~361 |
+| `partitions.rs` | Partitions cards, resource utilization bars | ~282 |
+| `personal.rs` | Personal dashboard (summary, fairshare, jobs panels) | ~439 |
+| `problems.rs` | Problem nodes (down/draining sections) | ~245 |
+| `overlays.rs` | Help, filter, detail popup, confirm, sort, toast | ~640 |
+
+**Key design decisions:**
+- Kept each view's rendering logic self-contained in its own file
+- Shared helpers (`create_table_header`, `calculate_scroll_offset`, `centered_rect`,
+  `create_progress_bar`) extracted to widgets.rs
+- Status bar and info bar kept in mod.rs as they access multiple view states
+- Total: ~2,615 lines (slight increase from imports/headers, expected for better organization)
 
 ### 5.2 Create `src/tui/ui/widgets.rs`
 
