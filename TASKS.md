@@ -498,30 +498,37 @@ pub fn focused_job(&self) -> Option<&TuiJobInfo> {
 
 **Savings:** ~20 lines (code reduction) + 1 bug fix
 
-### 4.3 Implement Exportable Trait
+### 4.3 Implement Exportable Trait [DONE]
+
+Implemented an `Exportable` trait that consolidates export logic for jobs, nodes, and partitions:
 
 ```rust
-trait Exportable: Serialize {
+/// Trait for types that can be exported to JSON and CSV formats.
+pub trait Exportable {
     fn csv_headers() -> &'static [&'static str];
     fn to_csv_row(&self) -> Vec<String>;
+    fn to_json_value(&self) -> serde_json::Value;
 }
 
-fn export_items<T: Exportable>(items: &[T], format: ExportFormat) -> String {
-    match format {
-        ExportFormat::Json => serde_json::to_string_pretty(items).unwrap(),
-        ExportFormat::Csv => {
-            let mut out = T::csv_headers().join(",") + "\n";
-            for item in items {
-                out.push_str(&item.to_csv_row().join(","));
-                out.push('\n');
-            }
-            out
-        }
-    }
-}
+/// Blanket implementation for references - allows exporting Vec<&T>
+impl<T: Exportable> Exportable for &T { ... }
+
+/// Generic export function
+pub fn export_items<T: Exportable>(items: &[T], format: ExportFormat) -> String { ... }
 ```
 
-**Savings:** ~100 lines
+**Key design decisions:**
+- Used `to_json_value()` instead of `Serialize` bound - allows custom field selection for export
+- Added blanket implementation for `&T` to support `Vec<&TuiJobInfo>` from `get_display_jobs()`
+- CSV escaping handled centrally in `export_items()`, not in each `to_csv_row()` impl
+- Implemented trait for `TuiJobInfo`, `NodeInfo`, and `PartitionStatus`
+
+**Refactored methods (before -> after):**
+- `export_jobs()`: 75 lines -> 10 lines
+- `export_nodes()`: 65 lines -> 10 lines
+- `export_partitions()`: 65 lines -> 10 lines
+
+**Savings:** ~175 lines reduced + cleaner separation of concerns
 
 ---
 

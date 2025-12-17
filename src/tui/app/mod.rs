@@ -10,7 +10,7 @@ mod state;
 mod types;
 
 // Re-export public types
-pub use export::escape_csv;
+pub use export::{escape_csv, export_items, Exportable};
 pub use filter::{job_matches_any_field, job_matches_field, job_matches_filter, job_matches_gpu};
 pub use state::{
     AccountContext, ActiveFilter, ClipboardFeedback, ConfirmAction, DataCache, ExportFormat,
@@ -1115,213 +1115,39 @@ impl App {
     fn export_jobs(&mut self, format: ExportFormat) {
         let jobs = self.get_display_jobs();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-
-        match format {
-            ExportFormat::Json => {
-                let export_data: Vec<serde_json::Value> = jobs
-                    .iter()
-                    .map(|job| {
-                        serde_json::json!({
-                            "job_id": job.job_id.to_string(),
-                            "name": job.name,
-                            "user": job.user_name,
-                            "account": job.account,
-                            "partition": job.partition,
-                            "state": job.state.as_str(),
-                            "state_reason": job.state_reason,
-                            "priority": job.priority,
-                            "qos": job.qos,
-                            "cpus": job.cpus,
-                            "gpus": job.gpu_count,
-                            "gpu_type": job.gpu_type,
-                            "nodes": job.nodes,
-                            "elapsed_seconds": job.elapsed_seconds,
-                            "time_limit_seconds": job.time_limit_seconds,
-                            "working_directory": job.working_directory,
-                        })
-                    })
-                    .collect();
-
-                let filename = format!("cmon_jobs_{}.json", timestamp);
-                match serde_json::to_string_pretty(&export_data) {
-                    Ok(json_str) => {
-                        self.write_export_file(&filename, &json_str, jobs.len(), "jobs")
-                    }
-                    Err(e) => {
-                        self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(format!(
-                            "Failed to serialize jobs: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-            ExportFormat::Csv => {
-                let mut csv = String::new();
-                // CSV header
-                csv.push_str("job_id,name,user,account,partition,state,state_reason,priority,qos,cpus,gpus,gpu_type,nodes,elapsed_seconds,time_limit_seconds,time_remaining_seconds,working_directory\n");
-                // CSV rows
-                for job in &jobs {
-                    let time_remaining = job.time_remaining().map(|d| d.as_secs()).unwrap_or(0);
-                    csv.push_str(&format!(
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-                        job.job_id,
-                        escape_csv(&job.name),
-                        escape_csv(&job.user_name),
-                        escape_csv(&job.account),
-                        escape_csv(&job.partition),
-                        job.state.as_str(),
-                        escape_csv(&job.state_reason),
-                        job.priority,
-                        escape_csv(&job.qos),
-                        job.cpus,
-                        job.gpu_count,
-                        job.gpu_type.as_deref().unwrap_or(""),
-                        escape_csv(&job.nodes),
-                        job.elapsed_seconds,
-                        job.time_limit_seconds,
-                        time_remaining,
-                        escape_csv(&job.working_directory),
-                    ));
-                }
-
-                let filename = format!("cmon_jobs_{}.csv", timestamp);
-                self.write_export_file(&filename, &csv, jobs.len(), "jobs");
-            }
-        }
+        let extension = match format {
+            ExportFormat::Json => "json",
+            ExportFormat::Csv => "csv",
+        };
+        let filename = format!("cmon_jobs_{}.{}", timestamp, extension);
+        let content = export_items(&jobs, format);
+        self.write_export_file(&filename, &content, jobs.len(), "jobs");
     }
 
     /// Export nodes to file (JSON or CSV)
     fn export_nodes(&mut self, format: ExportFormat) {
         let nodes = self.data.nodes.as_slice();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-
-        match format {
-            ExportFormat::Json => {
-                let export_data: Vec<serde_json::Value> = nodes
-                    .iter()
-                    .map(|node| {
-                        let gpu_info = node.gpu_info();
-                        serde_json::json!({
-                            "name": node.node_names.nodes.first().unwrap_or(&"".to_string()),
-                            "partition": node.partition.name,
-                            "state": node.primary_state(),
-                            "cpus_allocated": node.cpus.allocated,
-                            "cpus_total": node.cpus.total,
-                            "memory_allocated_mb": node.memory.allocated,
-                            "memory_total_mb": node.memory.minimum,
-                            "gpus_used": gpu_info.used,
-                            "gpus_total": gpu_info.total,
-                            "gpu_type": gpu_info.gpu_type,
-                        })
-                    })
-                    .collect();
-
-                let filename = format!("cmon_nodes_{}.json", timestamp);
-                match serde_json::to_string_pretty(&export_data) {
-                    Ok(json_str) => {
-                        self.write_export_file(&filename, &json_str, nodes.len(), "nodes")
-                    }
-                    Err(e) => {
-                        self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(format!(
-                            "Failed to serialize nodes: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-            ExportFormat::Csv => {
-                let mut csv = String::new();
-                // CSV header
-                csv.push_str("name,partition,state,cpus_allocated,cpus_total,memory_allocated_mb,memory_total_mb,gpus_used,gpus_total,gpu_type\n");
-                // CSV rows
-                for node in nodes {
-                    let gpu_info = node.gpu_info();
-                    csv.push_str(&format!(
-                        "{},{},{},{},{},{},{},{},{},{}\n",
-                        node.name(),
-                        node.partition.name.as_deref().unwrap_or(""),
-                        node.primary_state(),
-                        node.cpus.allocated,
-                        node.cpus.total,
-                        node.memory.allocated,
-                        node.memory.minimum,
-                        gpu_info.used,
-                        gpu_info.total,
-                        gpu_info.gpu_type,
-                    ));
-                }
-
-                let filename = format!("cmon_nodes_{}.csv", timestamp);
-                self.write_export_file(&filename, &csv, nodes.len(), "nodes");
-            }
-        }
+        let extension = match format {
+            ExportFormat::Json => "json",
+            ExportFormat::Csv => "csv",
+        };
+        let filename = format!("cmon_nodes_{}.{}", timestamp, extension);
+        let content = export_items(nodes, format);
+        self.write_export_file(&filename, &content, nodes.len(), "nodes");
     }
 
     /// Export partitions to file (JSON or CSV)
     fn export_partitions(&mut self, format: ExportFormat) {
         let partitions = self.compute_partition_stats();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-
-        match format {
-            ExportFormat::Json => {
-                let export_data: Vec<serde_json::Value> = partitions
-                    .iter()
-                    .map(|p| {
-                        serde_json::json!({
-                            "name": p.name,
-                            "total_nodes": p.total_nodes,
-                            "available_nodes": p.available_nodes,
-                            "down_nodes": p.down_nodes,
-                            "total_cpus": p.total_cpus,
-                            "allocated_cpus": p.allocated_cpus,
-                            "cpu_utilization": p.cpu_utilization(),
-                            "total_gpus": p.total_gpus,
-                            "allocated_gpus": p.allocated_gpus,
-                            "gpu_utilization": p.gpu_utilization(),
-                            "gpu_type": p.gpu_type,
-                        })
-                    })
-                    .collect();
-
-                let filename = format!("cmon_partitions_{}.json", timestamp);
-                match serde_json::to_string_pretty(&export_data) {
-                    Ok(json_str) => {
-                        self.write_export_file(&filename, &json_str, partitions.len(), "partitions")
-                    }
-                    Err(e) => {
-                        self.feedback.set_clipboard_feedback(ClipboardFeedback::failure(format!(
-                            "Failed to serialize partitions: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-            ExportFormat::Csv => {
-                let mut csv = String::new();
-                // CSV header
-                csv.push_str("name,total_nodes,available_nodes,down_nodes,total_cpus,allocated_cpus,cpu_utilization,total_gpus,allocated_gpus,gpu_utilization,gpu_type\n");
-                // CSV rows
-                for p in &partitions {
-                    csv.push_str(&format!(
-                        "{},{},{},{},{},{},{:.1},{},{},{:.1},{}\n",
-                        p.name,
-                        p.total_nodes,
-                        p.available_nodes,
-                        p.down_nodes,
-                        p.total_cpus,
-                        p.allocated_cpus,
-                        p.cpu_utilization(),
-                        p.total_gpus,
-                        p.allocated_gpus,
-                        p.gpu_utilization(),
-                        p.gpu_type.as_deref().unwrap_or(""),
-                    ));
-                }
-
-                let filename = format!("cmon_partitions_{}.csv", timestamp);
-                self.write_export_file(&filename, &csv, partitions.len(), "partitions");
-            }
-        }
+        let extension = match format {
+            ExportFormat::Json => "json",
+            ExportFormat::Csv => "csv",
+        };
+        let filename = format!("cmon_partitions_{}.{}", timestamp, extension);
+        let content = export_items(&partitions, format);
+        self.write_export_file(&filename, &content, partitions.len(), "partitions");
     }
 
     /// Helper to write export file and set feedback
