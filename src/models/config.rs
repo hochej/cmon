@@ -206,13 +206,12 @@ impl Default for DisplayConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct BehaviorConfig {
     /// Require confirmation before cancelling jobs
-    #[serde(default = "default_true")]
     pub confirm_cancel: bool,
 
     /// Enable clipboard support
-    #[serde(default = "default_true")]
     pub copy_to_clipboard: bool,
 }
 
