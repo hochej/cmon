@@ -343,7 +343,8 @@ async fn fetch_and_send_jobs(
     .await;
 
     handle_fetch_result(result, tx, throttle, DataSource::Jobs, |jobs| {
-        let tui_jobs: Vec<TuiJobInfo> = jobs.iter().map(TuiJobInfo::from_job_info).collect();
+        let tui_jobs: Vec<TuiJobInfo> =
+            jobs.iter().filter_map(TuiJobInfo::from_job_info).collect();
         DataEvent::JobsUpdated(tui_jobs)
     });
 }

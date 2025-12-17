@@ -126,7 +126,22 @@ pub struct TuiJobInfo {
 
 impl TuiJobInfo {
     /// Convert from models::JobInfo
-    pub fn from_job_info(job: &JobInfo) -> Self {
+    ///
+    /// Returns `None` if the job has an invalid (zero) job ID, which should never
+    /// occur with valid Slurm data but may happen with malformed JSON or test data.
+    pub fn from_job_info(job: &JobInfo) -> Option<Self> {
+        // Validate job_id first - zero is invalid in Slurm
+        let base_id = match NonZeroU64::new(job.job_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(
+                    job_name = %job.name,
+                    "Skipping job with invalid zero job_id"
+                );
+                return None;
+            }
+        };
+
         // Get the first state string for display
         let state_str = job.state.first().map(|s| s.as_str()).unwrap_or("UNKNOWN");
         let state = JobState::from_state_string(state_str);
@@ -148,10 +163,9 @@ impl TuiJobInfo {
         // Extract array task id from job_id if present (format: "12345_67")
         let array_task_id = None; // Not directly available in current JobInfo
 
-        Self {
+        Some(Self {
             job_id: JobId {
-                base_id: NonZeroU64::new(job.job_id)
-                    .expect("Slurm job IDs should never be zero"),
+                base_id,
                 array_task_id,
             },
             name: job.name.clone(),
@@ -214,7 +228,7 @@ impl TuiJobInfo {
             array_tasks_pending: None,
             array_tasks_running: None,
             array_tasks_completed: None,
-        }
+        })
     }
 
     #[must_use]
