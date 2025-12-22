@@ -1,5 +1,6 @@
 //! cmon - Fast cluster monitoring tool for Slurm
 
+mod devrun;
 mod display;
 pub mod formatting;
 mod models;
@@ -162,6 +163,12 @@ enum Commands {
         watch: f64,
     },
 
+    /// Start an interactive development session on the HPC cluster
+    Devrun {
+        #[command(flatten)]
+        args: devrun::DevrunArgs,
+    },
+
     /// Launch interactive TUI mode
     #[command(alias = "ui")]
     Tui,
@@ -321,6 +328,9 @@ fn main() -> Result<()> {
             run_with_optional_watch(watch, move || {
                 handle_down_command(&slurm, partition.as_deref(), all, &prefix)
             })?;
+        }
+        Some(Commands::Devrun { args }) => {
+            devrun::run_devrun(args)?;
         }
         Some(Commands::Tui) => {
             tui::run()?;

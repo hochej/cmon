@@ -925,6 +925,79 @@ impl SlurmInterface {
             }
         }
     }
+
+    /// Get list of accounts available to the current user
+    ///
+    /// Executes `sacctmgr` to query accounts associated with the current user.
+    ///
+    /// # Returns
+    /// Vector of unique account names, sorted alphabetically
+    pub fn get_accounts(&self) -> Result<Vec<String>> {
+        let user = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .context("Could not determine username")?;
+
+        let output = Command::new("sacctmgr")
+            .args(&[
+                "show", "user", "where", &format!("name={}", user),
+                "withassoc", "format=account%50", "-n", "-P"
+            ])
+            .output()
+            .context("Failed to execute sacctmgr command")?;
+
+        if !output.status.success() {
+            anyhow::bail!("Failed to retrieve accounts from SLURM");
+        }
+
+        let accounts: Vec<String> = String::from_utf8(output.stdout)
+            .context("Invalid UTF-8 in sacctmgr output")?
+            .lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let mut unique_accounts: Vec<String> = accounts.into_iter().collect();
+        unique_accounts.sort();
+        unique_accounts.dedup();
+
+        Ok(unique_accounts)
+    }
+
+    /// Get list of available SLURM partitions
+    ///
+    /// Executes `sinfo` to query partition names.
+    ///
+    /// # Returns
+    /// Vector of unique partition names, sorted alphabetically, with default partition asterisk removed
+    pub fn get_partitions(&self) -> Result<Vec<String>> {
+        let output = Command::new(format!("{}/sinfo", self.slurm_bin_path))
+            .args(&["-h", "-o", "%P"])
+            .output()
+            .context("Failed to execute sinfo command")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to retrieve partitions from SLURM. Check if SLURM is available and you have proper access."
+            );
+        }
+
+        let partitions: Vec<String> = String::from_utf8(output.stdout)
+            .context("Invalid UTF-8 in sinfo output")?
+            .lines()
+            .map(|s| s.trim().trim_end_matches('*').to_string())  // Remove asterisk from default partition
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if partitions.is_empty() {
+            anyhow::bail!("No partitions found. Check your SLURM configuration.");
+        }
+
+        let mut unique_partitions: Vec<String> = partitions.into_iter().collect();
+        unique_partitions.sort();
+        unique_partitions.dedup();
+
+        Ok(unique_partitions)
+    }
 }
 
 /// Shorten node names by removing a configurable prefix
